@@ -17,9 +17,9 @@
 
 ```
 .
-├── docs/           系统架构、通信协议、故障码表、标定记录
+├── docs/           项目文档（见下方「文档」）
 ├── hardware/       接线图、物料清单
-├── firmware/       STM32 固件（CubeMX 工程）
+├── firmware/       STM32 固件：bootloader / app / shared
 ├── ros2_ws/src/    ROS 2 功能包
 ├── models/         模型说明（权重不入库，见 models/README.md）
 ├── tools/          模型转换、标定、数据采集脚本
@@ -27,6 +27,19 @@
 ├── scripts/        构建与部署脚本
 └── tests/          单元测试
 ```
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [项目介绍](docs/project-intro.md) | 背景、范围、技术选型理由、指标、里程碑 |
+| [项目框架](docs/architecture.md) | 双控分工、硬件拓扑、软件分层、数据流、部署 |
+| [软件结构](docs/software-design.md) | 包划分、接口、状态机、并发、错误处理 |
+| [串口协议](docs/protocol.md) | 帧格式、命令字、CRC、超时、故障码、测试向量 |
+| [提交规范](docs/commit-convention.md) | 提交信息、分支、标签 |
+| [编码规范](docs/coding-style.md) | 命名、错误处理、ISR 约束 |
+| [自测规范](docs/testing.md) | 测试分层、故障注入、发版检查 |
+| [AI 使用说明](docs/ai-usage.md) | 使用边界与验证要求 |
 
 ## 开发进度
 

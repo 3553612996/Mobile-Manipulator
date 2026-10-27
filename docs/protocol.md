@@ -126,7 +126,7 @@ RK3566（Host）↔ STM32F411（MCU）之间的应用层协议。
 | --- | --- | --- | --- | --- |
 | `0xC1` | REPORT_ODOM | `int32 x_mm`, `int32 y_mm`, `int16 theta` (0.01°), `int16 vl` (mm/s), `int16 vr` (mm/s) | 14 | 50 Hz |
 | `0xC2` | REPORT_ARM | 6 × `int16` 实际角 (0.01°), `int16` 夹爪位置, `uint8` 夹爪状态 (0=张开 1=夹持 2=夹空) | 15 | 20 Hz |
-| `0xC3` | REPORT_STATUS | `uint8` 状态机, `uint16` 故障码, `uint16` 电池 mV, `int8` 温度, `uint16` 主循环抖动 µs | 8 | 10 Hz |
+| `0xC3` | REPORT_STATUS | `uint8` 状态机, `uint16` 故障码, `uint16` 电池 mV, `int8` 温度, `uint16` 最大调度抖动 µs | 8 | 10 Hz |
 | `0xC4` | REPORT_EVENT | `uint16` 故障码, `uint32` 时间戳 ms | 6 | 事件触发 |
 | `0xC5` | REPORT_HEARTBEAT | `uint8` 状态, `uint16` 运行计数 | 3 | 10 Hz |
 
