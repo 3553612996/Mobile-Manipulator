@@ -1,0 +1,64 @@
+# ===== ROS 2 编译产物 =====
+build/
+install/
+log/
+*.egg-info/
+compile_commands.json
+
+# ===== CMake / C++ =====
+*.o
+*.a
+*.so
+*.d
+CMakeCache.txt
+CMakeFiles/
+
+# ===== STM32 / Keil / CubeMX =====
+Debug/
+Release/
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+*.uvguix.*
+*.scvd
+*.dep
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ===== 数据与录包：不入库 =====
+datasets/
+*.bag
+*.db3
+*.mcap
+*.avi
+*.mp4
+
+# ===== 模型权重：不入库，由 tools/ 脚本重新生成 =====
+*.pt
+*.pth
+*.onnx
+*.rknn
+
+# ===== 密钥与密码 =====
+*.secret
+.env
+config/wifi.yaml
+config/*_password.*
+
+# ===== 日志与崩溃转储 =====
+*.log
+coredump*
+
+# ===== 编辑器 / 系统 =====
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
