@@ -36,7 +36,7 @@
 | [项目框架](docs/architecture.md) | 双控分工、硬件拓扑、软件分层、数据流、部署 |
 | [软件结构](docs/software-design.md) | 包划分、接口、状态机、并发、错误处理 |
 | [串口协议](docs/protocol.md) | 帧格式、命令字、CRC、超时、故障码、测试向量 |
-| [提交规范](docs/commit-convention.md) | 提交信息、分支、标签 |
+| [提交规范](docs/commit-convention.md) | 提交信息、分支模型、版本与标签 |
 | [编码规范](docs/coding-style.md) | 命名、错误处理、ISR 约束 |
 | [自测规范](docs/testing.md) | 测试分层、故障注入、发版检查 |
 | [AI 使用说明](docs/ai-usage.md) | 使用边界与验证要求 |

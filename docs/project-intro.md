@@ -100,7 +100,7 @@
 | [项目框架](architecture.md) | 系统分层、硬件拓扑、数据流、部署 |
 | [软件结构](software-design.md) | 包划分、接口、状态机、并发、错误处理 |
 | [串口协议](protocol.md) | 帧格式、命令字、CRC、超时、故障码 |
-| [提交规范](commit-convention.md) | 提交信息、分支、标签 |
+| [提交规范](commit-convention.md) | 提交信息、分支模型、版本与标签 |
 | [编码规范](coding-style.md) | 命名、错误处理、ISR 约束 |
 | [自测规范](testing.md) | 测试分层、故障注入、发版检查 |
 | [AI 使用说明](ai-usage.md) | 使用边界、验证要求 |
