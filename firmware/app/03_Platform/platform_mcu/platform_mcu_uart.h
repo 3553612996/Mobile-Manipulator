@@ -65,7 +65,8 @@ typedef enum
 {
     PLATFORM_UART_EVENT_RX_IDLE = 0,    /* Idle line detected. */
     PLATFORM_UART_EVENT_TX_DONE,        /* Async TX finished. */
-    PLATFORM_UART_EVENT_RX_ERROR        /* Overrun/framing/noise/parity. */
+    PLATFORM_UART_EVENT_RX_ERROR,       /* Overrun/framing/noise/parity. */
+    PLATFORM_UART_EVENT_RX_DATA         /* RX ring buffer has new bytes. */
 } platform_uart_event_t;
 
 typedef struct
@@ -116,6 +117,21 @@ platform_err_t platform_uart_read_async(platform_uart_bus_t bus,
  */
 platform_err_t platform_uart_get_rx_count(platform_uart_bus_t bus,
                                          uint32_t *rx_len);
+
+/*
+ * Non-blocking drain of the RX ring buffer filled by the DMA half-transfer,
+ * full-transfer and idle interrupts. out_len receives the number of bytes
+ * copied (0 when the buffer is empty). This is the intended path when
+ * use_dma is TRUE; it never blocks and never parses.
+ */
+platform_err_t platform_uart_rx_read(platform_uart_bus_t bus,
+                                     uint8_t *data,
+                                     uint32_t max_len,
+                                     uint32_t *out_len);
+
+/* Bytes currently waiting in the RX ring buffer. */
+platform_err_t platform_uart_rx_available(platform_uart_bus_t bus,
+                                          uint32_t *count);
 
 platform_err_t platform_uart_register_event_cb(platform_uart_bus_t bus,
                                               platform_uart_event_cb_t callback,

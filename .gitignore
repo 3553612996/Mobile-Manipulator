@@ -62,6 +62,7 @@ config/*_password.*
 
 # ===== 日志与崩溃转储 =====
 *.log
+*_log.txt
 coredump*
 
 # ===== 编辑器 / 系统 =====

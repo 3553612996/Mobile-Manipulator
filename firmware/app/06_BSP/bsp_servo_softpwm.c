@@ -4,7 +4,7 @@
  * @file bsp_servo_softpwm.c
  *
  * @par dependencies
- * - 05_BSP/bsp_servo_softpwm.h
+ * - 06_BSP/bsp_servo_softpwm.h
  * - platform_mcu_gpio.h
  * - platform_mcu_timer.h
  *

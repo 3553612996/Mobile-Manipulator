@@ -28,7 +28,7 @@
 04_Impl/impl_bsp/*.c                    <-- 实现：设备表 + 分发 + ops 适配 + 注册
         |
         v
-05_BSP/*.c                              <-- 具体驱动：寄存器、时序、协议
+06_BSP/*.c                              <-- 具体驱动：寄存器、时序、协议
         |
         v
 03_Platform/platform_mcu + platform_os  <-- 适配层向下使用总线/OS 接口
@@ -36,7 +36,7 @@
 
 对应关系：
 
-| 平台契约 | 04_Impl 适配器 | 05_BSP 具体驱动 |
+| 平台契约 | 04_Impl 适配器 | 06_BSP 具体驱动 |
 | --- | --- | --- |
 | `platform_motor_ops_t` | `impl_bsp_motor.c` | `bsp_motor_dual_pwm.c`：双 PWM H 桥 + 定时器编码器 |
 | `platform_servo_ops_t` | `impl_bsp_servo.c` | `bsp_servo_softpwm.c`：六路 GPIO 软件 PWM |
@@ -115,7 +115,7 @@ platform_temphumi_register(&aht21_ops, &aht21_ctx);
 
 ## 不在本层的内容
 
-- 芯片寄存器、命令字、时序、片选延时 → `05_BSP`
+- 芯片寄存器、命令字、时序、片选延时 → `06_BSP`
 - 引脚/总线号映射 → `04_Impl/impl_board`
 - PID、轨迹插补、限位与奇异检查 → 控制/运动层
 - 故障码分级与上报策略 → 安全/协议层

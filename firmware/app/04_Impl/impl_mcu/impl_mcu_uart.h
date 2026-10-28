@@ -51,6 +51,21 @@ platform_err_t impl_uart_read_async(platform_uart_bus_t bus,
 platform_err_t impl_uart_get_rx_count(platform_uart_bus_t bus,
                                       uint32_t *rx_len);
 
+/* Non-blocking drain of the DMA RX ring buffer (see platform_mcu_uart.h). */
+platform_err_t impl_uart_rx_read(platform_uart_bus_t bus,
+                                 uint8_t *data,
+                                 uint32_t max_len,
+                                 uint32_t *out_len);
+platform_err_t impl_uart_rx_available(platform_uart_bus_t bus,
+                                      uint32_t *count);
+
+/*
+ * Call from USART3_IRQHandler (USER CODE section). Detects the IDLE flag,
+ * clears it and moves the newly received DMA bytes into the ring buffer.
+ * Kept free of HAL types so Core does not need vendor headers for it.
+ */
+void impl_uart_rx_poll_isr(void);
+
 platform_err_t impl_uart_register_event_cb(
                                         platform_uart_bus_t bus,
                                         platform_uart_event_cb_t callback,

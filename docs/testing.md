@@ -21,16 +21,19 @@
 
 ### 2.1 什么代码可以被单测
 
-能被单测的前提是**不依赖硬件**：
+能被单测的前提是**不依赖硬件**。当前已经可以在 PC 上跑的模块：
 
-- `shared/protocol.c` —— 只依赖 `stdint.h`
-- `shared/crc16.c`
-- `fault.c` —— 故障码置位/清除逻辑
-- `robot_task` 的状态机 —— 输入事件、输出动作，纯逻辑
+| 测试 | 覆盖对象 | 依赖 |
+| --- | --- | --- |
+| `tests/test_protocol_codec.c` | `05_Middlewares/protocol`：协议表、组帧、解帧、CRC | 无（只需 gcc） |
+| `tests/test_service_proto.c` | `02_Service/service_proto`：分发、ACK、SEQ 去重、上报组帧 | UART 用内存管道替身 |
+| `tests/test_service_chassis.c` | `02_Service/service_chassis`：麦轮解算、超时、急停、里程计 | 电机用桩函数替身 |
+| `tests/test_service_key.c` | `02_Service/service_key`：短按/长按策略 | 按键用脚本状态替身 |
+| `tests/test_platform_middleware.c` | 环形缓冲、CRC、滤波 | 无 |
 
-**测不了的**：`motor.c`、`servo.c`、`bsp_*.c`——它们直接操作寄存器。
+**测不了的**：`impl_mcu_*.c`、`impl_bsp_*.c`、`bsp_*.c`——它们直接操作寄存器和 HAL。
 
-所以设计上的要求是：**能抽出来的逻辑一定抽出来**。比如轨迹插补的步长计算是纯数学，应该独立成 `trajectory_calc()` 放在可测文件里，`servo.c` 只负责把结果写进寄存器。
+所以设计上的要求是：**能抽出来的逻辑一定抽出来**。服务层把时间、设备访问都做成参数或桩，纯逻辑（运动学、超时判定、按键策略）就能脱离硬件测试；`impl_*` 只负责把结果写进寄存器。
 
 ### 2.2 怎么写
 
@@ -89,7 +92,7 @@ int main(void)
 | 标准 SET_VELOCITY 帧 | 解析成功，字段正确 |
 | 空负载 ESTOP 帧（最短帧） | 解析成功 |
 | CRC 错一位 | 丢弃，状态复位 |
-| `LEN = 1`（小于 3） | 丢弃，不越界 |
+| `LEN = 1`（小于 2） | 丢弃，不越界 |
 | `LEN = 255`（大于 66） | 丢弃，不越界 |
 | 半帧后中断 | 超时复位，后续正常帧能解出 |
 | 连续喂 10 万随机字节 | 不崩溃、不越界 |
@@ -97,18 +100,28 @@ int main(void)
 
 ### 2.4 运行
 
-```bash
-gcc -std=c99 -Wall -Wextra -Werror \
-    -I firmware/shared/Inc \
-    firmware/shared/Src/protocol.c \
-    firmware/shared/Src/crc16.c \
-    tests/test_protocol.c \
-    -o tests/test_protocol
+完整编译命令写在每个测试文件的头部注释里。汇总：
 
-./tests/test_protocol
+```bash
+# 协议表 + 编解码
+gcc -std=c99 -Wall -Wextra \
+    -I firmware/app/03_Platform/platform_common \
+    -I firmware/app/04_Impl \
+    -I firmware/app/03_Platform/platform_middleware \
+    -I firmware/app/05_Middlewares/protocol \
+    tests/test_protocol_codec.c \
+    firmware/app/05_Middlewares/protocol/protocol_codec.c \
+    firmware/app/05_Middlewares/protocol/protocol_def.c \
+    firmware/app/03_Platform/platform_middleware/platform_crc.c \
+    -o build/test_protocol_codec
+
+# 服务层（命令见文件头）
+#   tests/test_service_proto.c
+#   tests/test_service_chassis.c   （需要 -lm）
+#   tests/test_service_key.c
 ```
 
-**通过标准**：返回码 0，输出"全部通过"。
+**通过标准**：退出码 0，输出 `PASS: ...`。任何一个 FAIL 都要在联调前修掉。
 
 ---
 
@@ -156,6 +169,24 @@ ros2 bag play ~/bags/2026-10-27-nomap --rate 0.5
 ### 4.2 怎么测超时
 
 不要在代码里改超时时间（改了就忘了改回来）。用物理方式：**直接拔串口线**。这是最接近真实故障的测法。
+
+### 4.3 协议闭环
+
+[`tools/proto_loop.py`](../tools/proto_loop.py) 按协议 v1 逐条验证"下发 → ACK → 上报"三段是否一致：
+
+```bash
+python tools/proto_loop.py --list                        # 找串口
+python tools/proto_loop.py --port COM3 --monitor         # 只看上行帧和频率
+python tools/proto_loop.py --port COM3 --auto            # 静态项：使能/急停/清故障/拒绝非法帧
+python tools/proto_loop.py --port COM3 --auto --move     # 加上速度、断流停车（底盘必须架空）
+python tools/proto_loop.py --sim --auto --move           # 用内置模拟器自检脚本本身
+```
+
+每一项都先看 ACK，再看紧随其后的 `STATUS`/`ODOM`/`EVENT`：只回了 ACK 不算通过，状态没变说明处理函数和应答对不上。通过标准是**全部 PASS、0 帧 CRC 错误**。
+
+`0x0202`（断流停车）只有真机能测：模拟器只把速度归零，不锁存故障，这一项在 `--sim` 下显示为 SKIP。
+
+**电池低于 6.8 V 时**（`0x0401` 锁存，状态字节停在 `FAULT`），`MANUAL` 和"清除后回到 IDLE"两项无论如何都到不了。脚本按实测电压把它们记为 SKIP 并打印 mV，而不是 FAIL——否则红灯会指向固件，实际是台架条件不对。要让这两项跑绿，先把电池充到 6.8 V 以上（或换稳压电源）。
 
 ---
 

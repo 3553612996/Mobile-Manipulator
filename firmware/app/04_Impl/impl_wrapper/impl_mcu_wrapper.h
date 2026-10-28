@@ -66,6 +66,12 @@ platform_err_t impl_uart_read_async_wrap(platform_uart_bus_t bus,
                                          uint32_t max_len);
 platform_err_t impl_uart_get_rx_count_wrap(platform_uart_bus_t bus,
                                            uint32_t *rx_len);
+platform_err_t impl_uart_rx_read_wrap(platform_uart_bus_t bus,
+                                      uint8_t *data,
+                                      uint32_t max_len,
+                                      uint32_t *out_len);
+platform_err_t impl_uart_rx_available_wrap(platform_uart_bus_t bus,
+                                           uint32_t *count);
 platform_err_t impl_uart_register_event_cb_wrap(
                                         platform_uart_bus_t bus,
                                         platform_uart_event_cb_t callback,

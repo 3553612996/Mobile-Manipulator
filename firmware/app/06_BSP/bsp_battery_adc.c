@@ -4,7 +4,7 @@
  * @file bsp_battery_adc.c
  *
  * @par dependencies
- * - 05_BSP/bsp_battery_adc.h
+ * - 06_BSP/bsp_battery_adc.h
  * - platform_mcu_adc.h
  *
  * @author wuying <3553612993@qq.com>

@@ -4,7 +4,7 @@
  * @file bsp_motor_dual_pwm.c
  *
  * @par dependencies
- * - 05_BSP/bsp_motor_dual_pwm.h
+ * - 06_BSP/bsp_motor_dual_pwm.h
  * - platform_mcu_pwm.h
  * - platform_mcu_encoder.h
  *

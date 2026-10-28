@@ -19,7 +19,7 @@
  * build a 32-bit cumulative position without losing an overflow that happens
  * between two reads. The read-clear pair is not atomic with respect to the
  * encoder edges; a delta is therefore accurate to one count. Consumers that
- * need absolute position must accumulate in software (see 05_BSP motor driver).
+ * need absolute position must accumulate in software (see 06_BSP motor driver).
  *
  * @version V1.0 2026-10-28
  *

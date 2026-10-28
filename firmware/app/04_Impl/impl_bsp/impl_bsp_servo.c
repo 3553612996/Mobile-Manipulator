@@ -5,7 +5,7 @@
  *
  * @par dependencies
  * - impl_bsp/impl_bsp_servo.h
- * - 05_BSP/bsp_servo_softpwm.h
+ * - 06_BSP/bsp_servo_softpwm.h
  *
  * @author wuying <3553612993@qq.com>
  *

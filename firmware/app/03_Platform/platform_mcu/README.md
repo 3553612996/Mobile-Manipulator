@@ -32,7 +32,7 @@ MCU 外设能力的统一出口。上层只认识 `platform_uart_*` / `platform_
 04_Impl/impl_mcu/*.c                <-- 只做 HAL / 标准库 / 寄存器适配
         |
         v
-05_BSP / 07_Vender (STM32 HAL, CMSIS)
+06_BSP / 07_Vender (STM32 HAL, CMSIS)
 ```
 
 **规则：**
@@ -102,7 +102,7 @@ MCU 外设能力的统一出口。上层只认识 `platform_uart_*` / `platform_
 
 ## 不在本层的内容
 
-以下内容属于 `04_Impl` / `05_BSP`，不要放进平台接口：
+以下内容属于 `04_Impl` / `06_BSP`，不要放进平台接口：
 
 - 时钟树、引脚复用、DMA 通道分配、NVIC 优先级；
 - 具体芯片的寄存器时序、片选延时、上电时序；
