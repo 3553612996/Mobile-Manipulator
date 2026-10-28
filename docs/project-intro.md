@@ -36,7 +36,7 @@
 | 机械臂 | 六轴 PWM 舵机 | 逆解 + 轨迹插补 |
 | 交互 | 麦克风阵列 | Vosk 离线识别 |
 
-架构细节见[项目框架](architecture.md)。
+架构细节见[项目框架](architecture/overview.md)。
 
 ## 4. 技术选型与理由
 
@@ -71,7 +71,7 @@
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | M1 | 板端环境、ROS 2 工作空间 | ⬜ |
-| M2 | 串口协议打通（CRC、状态机、测试向量） | ✅ 见 [test-report-m2.md](test-report-m2.md) |
+| M2 | 串口协议打通（CRC、状态机、测试向量） | ✅ 见 [M2 测试报告](nodes/m2/test-report.md) |
 | M3 | 底盘闭环：PWM / 编码器 / PID / 里程计 | ⬜ |
 | M4 | 激光建图与定位 | ⬜ |
 | M5 | Nav2 导航 | ⬜ |
@@ -97,10 +97,10 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [项目框架](architecture.md) | 系统分层、硬件拓扑、数据流、部署 |
-| [软件结构](software-design.md) | 包划分、接口、状态机、并发、错误处理 |
-| [串口协议](protocol.md) | 帧格式、命令字、CRC、超时、故障码 |
-| [提交规范](commit-convention.md) | 提交信息、分支模型、版本与标签 |
-| [编码规范](coding-style.md) | 命名、错误处理、ISR 约束 |
-| [自测规范](testing.md) | 测试分层、故障注入、发版检查 |
-| [AI 使用说明](ai-usage.md) | 使用边界、验证要求 |
+| [项目框架](architecture/overview.md) | 系统分层、硬件拓扑、数据流、部署 |
+| [软件结构](architecture/software-design.md) | 包划分、接口、状态机、并发、错误处理 |
+| [串口协议](architecture/protocol.md) | 帧格式、命令字、CRC、超时、故障码 |
+| [提交规范](conventions/commit-convention.md) | 提交信息、分支模型、版本与标签 |
+| [编码规范](conventions/coding-style.md) | 命名、错误处理、ISR 约束 |
+| [自测规范](conventions/testing.md) | 测试分层、故障注入、发版检查 |
+| [AI 使用说明](conventions/ai-usage.md) | 使用边界、验证要求 |

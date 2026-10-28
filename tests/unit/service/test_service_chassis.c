@@ -11,7 +11,7 @@
  *       -I firmware/app/04_Impl \
  *       -I firmware/app/03_Platform/platform_bsp \
  *       -I firmware/app/02_Service/service_chassis \
- *       tests/test_service_chassis.c \
+ *       tests/unit/service/test_service_chassis.c \
  *       firmware/app/02_Service/service_chassis/service_chassis.c \
  *       -o build/test_service_chassis -lm
  */

@@ -101,7 +101,7 @@ uint32_t protocol_encode(uint8_t cmd,
                          uint8_t *out,
                          uint32_t out_size);
 
-/* Little-endian field helpers (docs/protocol.md 3). */
+/* Little-endian field helpers (docs/architecture/protocol.md 3). */
 int16_t  protocol_get_i16(const uint8_t *src);
 uint16_t protocol_get_u16(const uint8_t *src);
 int32_t  protocol_get_i32(const uint8_t *src);

@@ -6,7 +6,7 @@
  *       -I firmware/app/04_Impl \
  *       -I firmware/app/03_Platform/platform_middleware \
  *       -I firmware/app/05_Middlewares/protocol \
- *       tests/test_protocol_codec.c \
+ *       tests/unit/protocol/test_protocol_codec.c \
  *       firmware/app/05_Middlewares/protocol/protocol_codec.c \
  *       firmware/app/05_Middlewares/protocol/protocol_def.c \
  *       firmware/app/03_Platform/platform_middleware/platform_crc.c \
@@ -28,7 +28,7 @@ static int g_failed = 0;
         }                                                                 \
     } while (0)
 
-/* ---- Vectors from docs/protocol.md section 10 ------------------------- */
+/* ---- Vectors from docs/architecture/protocol.md section 10 ---------- */
 
 static const uint8_t k_set_velocity[] =
 {

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Closed-loop test for the RK3566 <-> STM32 serial protocol (docs/protocol.md).
+"""Closed-loop test for the RK3566 <-> STM32 serial protocol
+(docs/architecture/protocol.md).
 
 Two modes:
 
-    python tools/proto_loop.py --list
-    python tools/proto_loop.py --port COM3 --monitor          # passive listen
-    python tools/proto_loop.py --port COM3 --auto             # safe suite
-    python tools/proto_loop.py --port COM3 --auto --move      # + motion + timeout
-    python tools/proto_loop.py --sim --auto --move            # against the GUI simulator
+    python tools/bench/proto_loop.py --list
+    python tools/bench/proto_loop.py --port COM3 --monitor    # passive listen
+    python tools/bench/proto_loop.py --port COM3 --auto       # safe suite
+    python tools/bench/proto_loop.py --port COM3 --auto --move  # + motion
+    python tools/bench/proto_loop.py --sim --auto --move      # GUI simulator
 
 Why the split: the only way to prove the link is to send a command and check
 both the ACK and the following report, so the suite always starts with an ACK
@@ -30,7 +31,8 @@ import time
 from collections import Counter, deque
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parent
+# tools/bench/ -> tools/, which is what makes `host_gui` importable.
+TOOLS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(TOOLS_DIR))
 
 from host_gui import protocol as P  # noqa: E402
@@ -559,7 +561,7 @@ def list_ports() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="M2 串口协议闭环测试（docs/protocol.md v1）")
+        description="M2 串口协议闭环测试（docs/architecture/protocol.md v1）")
     parser.add_argument("--list", action="store_true", help="列出串口后退出")
     parser.add_argument("--port", help="串口名，例如 COM3 或 /dev/ttyUSB0")
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD)

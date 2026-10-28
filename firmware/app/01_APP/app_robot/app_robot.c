@@ -259,8 +259,9 @@ static protocol_result_t app_handle_clear_fault(
     }
 
     /*
-     * docs/protocol.md section 8: refuse to clear while the condition is
-     * still present, otherwise the host sees "cleared, then raised again".
+     * docs/architecture/protocol.md section 8: refuse to clear while the
+     * condition is still present, otherwise the host sees "cleared, then
+     * raised again".
      * The pack being under voltage is measurable, so it is the one fault
      * this firmware can check; the others are latches by nature.
      */

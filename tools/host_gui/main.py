@@ -32,7 +32,7 @@ def _size(text: str) -> tuple[int, int]:
 def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="host_gui",
-        description="Mobile-Manipulator serial console (docs/protocol.md v1)")
+        description="Mobile-Manipulator serial console (docs/architecture/protocol.md v1)")
     parser.add_argument("--sim", action="store_true",
                         help="start with the built-in virtual MCU")
     parser.add_argument("--demo", action="store_true",

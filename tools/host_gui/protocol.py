@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wire format for the RK3566 <-> STM32 link (docs/protocol.md, v1).
+"""Wire format for the RK3566 <-> STM32 link (docs/architecture/protocol.md, v1).
 
 Pure Python and Qt-free on purpose: the frame codec is the part that has to
 match the MCU byte for byte, so it is kept small, testable and reusable by any

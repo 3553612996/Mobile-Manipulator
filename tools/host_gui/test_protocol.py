@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-tests for the host-side protocol codec.
 
-The vectors come straight from docs/protocol.md section 10. Run with:
+The vectors come straight from docs/architecture/protocol.md section 10. Run with:
 
     python tools/host_gui/test_protocol.py
 

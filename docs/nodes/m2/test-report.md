@@ -24,7 +24,7 @@ M2 的验收目标是**串口协议在真机上闭环**：上位机按协议 v1 
 
 测试工具是仓库内的两份代码，不含一次性脚本：
 
-- `tools/proto_loop.py`：闭环自动测试（`--auto` / `--auto --move` / `--sim`）
+- `tools/bench/proto_loop.py`：闭环自动测试（`--auto` / `--auto --move` / `--sim`）
 - `tools/host_gui/`：上位机（Qt + pyserial），用于手动验证
 
 **通过标准**：L1 退出码 0；L3 全部 PASS、0 帧 CRC 错误；只回 ACK 不算通过，必须看到随后的 `STATUS`/`ODOM`/`EVENT` 与命令语义一致。
@@ -44,7 +44,7 @@ M2 的验收目标是**串口协议在真机上闭环**：上位机按协议 v1 
 | 尺寸 | Code 35500 B，RO 768 B，RW 516 B，ZI 21164 B |
 | 烧录 | J-Link |
 
-配套的 PC 端解析代码在 `tools/host_gui/protocol.py`，与固件共用同一份协议定义（`docs/protocol.md` 为唯一契约）。
+配套的 PC 端解析代码在 `tools/host_gui/protocol.py`，与固件共用同一份协议定义（`docs/architecture/protocol.md` 为唯一契约）。
 
 ### 2.2 台架
 
@@ -70,11 +70,11 @@ M2 的验收目标是**串口协议在真机上闭环**：上位机按协议 v1 
 
 | 套件 | 覆盖对象 | 结果 |
 | --- | --- | --- |
-| `tests/test_protocol_codec.c` | 协议表、组帧、解帧、CRC、故障级别表 | 通过 |
-| `tests/test_service_proto.c` | 分发、ACK、SEQ 去重、上报组帧（UART 用内存管道替身） | 通过 |
-| `tests/test_service_chassis.c` | 麦轮解算、200 ms 超时、急停、桥臂使能、里程计 | 通过 |
-| `tests/test_service_key.c` | 短按/长按策略（时间注入） | 通过 |
-| `tests/test_platform_middleware.c` | 环形缓冲、CRC、滤波 | 通过 |
+| `tests/unit/protocol/test_protocol_codec.c` | 协议表、组帧、解帧、CRC、故障级别表 | 通过 |
+| `tests/unit/service/test_service_proto.c` | 分发、ACK、SEQ 去重、上报组帧（UART 用内存管道替身） | 通过 |
+| `tests/unit/service/test_service_chassis.c` | 麦轮解算、200 ms 超时、急停、桥臂使能、里程计 | 通过 |
+| `tests/unit/service/test_service_key.c` | 短按/长按策略（时间注入） | 通过 |
+| `tests/unit/platform/test_platform_middleware.c` | 环形缓冲、CRC、滤波 | 通过 |
 | `tools/host_gui/test_protocol.py` | 上位机解帧与 CRC | 通过 |
 
 编译选项 `-std=c99 -Wall -Wextra`，无告警。M2 期间为三个缺陷补了回归用例（见第 4 节 D2/D3/D4）。
@@ -82,7 +82,7 @@ M2 的验收目标是**串口协议在真机上闭环**：上位机按协议 v1 
 ### 3.2 L3 协议闭环：静态（`--auto`）
 
 ```
-python tools/proto_loop.py --port COM7 --auto
+python tools/bench/proto_loop.py --port COM7 --auto
 ```
 
 **通过 20 / 失败 0 / 跳过 1**，合法帧 388，CRC 错误 0。
@@ -92,7 +92,7 @@ python tools/proto_loop.py --port COM7 --auto
 ### 3.3 L3 协议闭环：运动（`--auto --move`）
 
 ```
-python tools/proto_loop.py --port COM7 --auto --move
+python tools/bench/proto_loop.py --port COM7 --auto --move
 ```
 
 **通过 21 / 失败 0 / 跳过 0**，合法帧 384，CRC 错误 0。
@@ -127,7 +127,7 @@ python tools/proto_loop.py --port COM7 --auto --move
 ### 3.5 协议模拟器自检
 
 ```
-python tools/proto_loop.py --sim --auto --move
+python tools/bench/proto_loop.py --sim --auto --move
 ```
 
 **通过 19 / 失败 0 / 跳过 1**。跳过的 `0x0202` 是设计使然：模拟器只把速度归零，不锁存固件侧的通信超时故障，该项必须真机验证。
@@ -152,7 +152,7 @@ D1 是测试工具的问题，不是固件；但它的价值在于：**误报"�
 
 ## 5. 架构分层检查
 
-针对 `01_APP` / `02_Service` / `05_Middlewares` 做了一次依赖扫描，检查是否有跨层直接调用：
+独立的检查报告：[架构分层检查](layering-audit.md)。摘要：
 
 | 检查项 | 结果 |
 | --- | --- |
@@ -162,12 +162,7 @@ D1 是测试工具的问题，不是固件；但它的价值在于：**误报"�
 | CubeMX 生成的头文件（`stm32f1xx_hal.h`、`usart.h` 等） | 只出现在 `04_Impl/impl_mcu` |
 | 相对路径 `../` 包含 | 无 |
 
-结论：**没有违背分层解耦的跨层调用**。以下两处是文档与实际依赖的差异，需要说明而不是修复：
-
-1. **`06_BSP` 包含了 `03_Platform/platform_mcu` 的头文件**（8 个文件）。实际物理依赖是 `06_BSP → platform_mcu（薄转发）→ impl_*_wrap → HAL`。`platform_mcu` 位于 BSP 之下，而 `docs/architecture.md` 写的单链 `03 → 04 → 06` 把这一层简化掉了，阅读时容易误解。建议在架构文档里补一句说明。
-2. **`01_APP` 直接调用 `platform_bsp_battery/led/buzzer` 与 `platform_os_*`**。文档允许 app 依赖 Platform，所以不算违规；但若严格坚持"app 只碰 service"，电池、LED、蜂鸣器应各包一层薄 service。当前规模下不值得增加三层转发，保留现状。
-
-另：`platform_mcu_*.c` 全部是对 `impl_*_wrap` 的转发，是有意的隔离层，代价是一次函数调用和两份声明，属于设计取舍，不是冗余。
+结论：**没有违背分层解耦的跨层调用**。检查过程中修正了架构文档的一处错误（`06_BSP` 依赖 `platform_mcu` 而非 HAL），并记录了两处不构成违规的现状：app 直接使用板级设备、`platform_mcu` 与 `impl_*_wrap` 的双跳转发。细节与可复现命令见[完整报告](layering-audit.md)。
 
 ---
 
@@ -209,7 +204,7 @@ D1 是测试工具的问题，不是固件；但它的价值在于：**误报"�
 
 ## 7. 结论
 
-1. 协议 v1 的组帧、解帧、CRC、ACK、SEQ 去重、上报频率在真机上全部符合 `docs/protocol.md`；
+1. 协议 v1 的组帧、解帧、CRC、ACK、SEQ 去重、上报频率在真机上全部符合 `docs/architecture/protocol.md`；
 2. 异常帧（未知命令、长度错误、CRC 错、断流）均被正确处理，没有出现死机或越界；
 3. 故障码按级别仲裁，低压不会掩盖通信超时这类更高优先级故障；
 4. 分层约束成立，app/service/middleware 中没有跨层调用；

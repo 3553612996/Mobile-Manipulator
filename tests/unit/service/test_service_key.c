@@ -10,7 +10,7 @@
  *       -I firmware/app/04_Impl \
  *       -I firmware/app/03_Platform/platform_bsp \
  *       -I firmware/app/02_Service/service_key \
- *       tests/test_service_key.c \
+ *       tests/unit/service/test_service_key.c \
  *       firmware/app/02_Service/service_key/service_key.c \
  *       -o build/test_service_key
  */

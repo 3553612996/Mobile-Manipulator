@@ -2,7 +2,7 @@
 """Host console for the Mobile-Manipulator serial protocol.
 
 Layout: chassis controls on the left, live state in the middle, arm on the
-right, communication log across the bottom. The console speaks docs/protocol.md
+right, communication log across the bottom. The console speaks docs/architecture/protocol.md
 v1; a built-in simulator stands in for the MCU until the firmware implements
 the protocol (M2.2/M2.3).
 
