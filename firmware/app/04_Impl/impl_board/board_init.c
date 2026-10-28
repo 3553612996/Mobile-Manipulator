@@ -30,6 +30,8 @@
  * compare; the "forward" input is chopped (see bsp_motor_dual_pwm.h).
  * Wheels B and D are mounted turned around, so their invert_direction is set:
  * with the same positive duty all four wheels then roll the vehicle forward.
+ * All four encoder A/B pairs are wired opposite to their motor terminals, so
+ * invert_encoder is set everywhere and a forward roll counts positive.
  *
  * @version V1.0 2026-10-28
  *
@@ -74,6 +76,7 @@ typedef struct
     uint8_t         pwm_reverse;
     uint8_t         encoder;
     platform_bool_t invert_direction;
+    platform_bool_t invert_encoder;
 } board_motor_wiring_t;
 
 //******************************** Variables ********************************//
@@ -98,17 +101,25 @@ static bsp_battery_adc_t    s_battery;
  * count" still holds for every wheel and the control layer needs no per-wheel
  * sign. Swapping the two PWM channels instead would not do: the drive would
  * reverse while the encoder kept its old sign.
+ *
+ * invert_encoder records the harness: every wheel's encoder A/B pair is wired
+ * opposite to its motor terminals, so after the mounting correction above all
+ * four wheels still counted negative when rolling forward (bench test
+ * 2026-10-28).  The mismatch is uniform, so it is a harness fact and not a
+ * per-wheel wiring error.  Flipping it here keeps "forward = positive" for the
+ * count as well as for the drive; without it a speed loop would close with
+ * positive feedback.
  */
 static const board_motor_wiring_t s_motor_wiring[BOARD_MOTOR_COUNT] =
 {
     /* A */ { PLATFORM_PWM_CHANNEL_0, PLATFORM_PWM_CHANNEL_1,
-              PLATFORM_ENCODER_CHANNEL_3, PLATFORM_FALSE },
+              PLATFORM_ENCODER_CHANNEL_3, PLATFORM_FALSE, PLATFORM_TRUE },
     /* B */ { PLATFORM_PWM_CHANNEL_2, PLATFORM_PWM_CHANNEL_3,
-              PLATFORM_ENCODER_CHANNEL_2, PLATFORM_TRUE  },
+              PLATFORM_ENCODER_CHANNEL_2, PLATFORM_TRUE,  PLATFORM_TRUE },
     /* C */ { PLATFORM_PWM_CHANNEL_5, PLATFORM_PWM_CHANNEL_6,
-              PLATFORM_ENCODER_CHANNEL_1, PLATFORM_FALSE },
+              PLATFORM_ENCODER_CHANNEL_1, PLATFORM_FALSE, PLATFORM_TRUE },
     /* D */ { PLATFORM_PWM_CHANNEL_4, PLATFORM_PWM_CHANNEL_7,
-              PLATFORM_ENCODER_CHANNEL_0, PLATFORM_TRUE  },
+              PLATFORM_ENCODER_CHANNEL_0, PLATFORM_TRUE,  PLATFORM_TRUE },
 };
 
 static const platform_gpio_t s_servo_pin[BSP_SERVO_JOINT_COUNT] =
@@ -134,6 +145,7 @@ static platform_err_t board_register_motors(void)
         s_motor[i].cfg.pwm_reverse      = s_motor_wiring[i].pwm_reverse;
         s_motor[i].cfg.encoder          = s_motor_wiring[i].encoder;
         s_motor[i].cfg.invert_direction = s_motor_wiring[i].invert_direction;
+        s_motor[i].cfg.invert_encoder   = s_motor_wiring[i].invert_encoder;
         s_motor[i].cfg.pwm_frequency_hz = BSP_MOTOR_PWM_FREQUENCY_HZ;
 
         err = platform_motor_register((platform_motor_id_t)i,

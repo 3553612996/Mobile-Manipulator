@@ -126,11 +126,11 @@ platform_err_t bsp_motor_dual_pwm_init(bsp_motor_dual_pwm_t *motor)
     encoder_cfg.channel = motor->cfg.encoder;
     encoder_cfg.filter  = BSP_MOTOR_ENCODER_FILTER;
     /*
-     * The encoder is left in its natural direction; cfg.invert_direction flips
-     * both the drive and the count, so positive duty always means a positive
-     * position change for the control layer.
+     * invert_encoder corrects the A/B pair, invert_direction corrects the
+     * mounting. Between them the control layer always sees one rule: positive
+     * duty and positive count are the same physical direction.
      */
-    encoder_cfg.invert  = PLATFORM_FALSE;
+    encoder_cfg.invert  = motor->cfg.invert_encoder;
 
     err = platform_encoder_init(&encoder_cfg);
     if (PLATFORM_IS_ERR(err))
