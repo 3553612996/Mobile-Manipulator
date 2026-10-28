@@ -1,14 +1,12 @@
 /******************************************************************************
- * Copyright (C) 2024 EternalChip, Inc.(Gmbh) or its affiliates.
- *
- * All Rights Reserved.
+ * Copyright (C) 2026 wuying. All Rights Reserved.
  *
  * @file platform_type.h
  *
  * @par dependencies
  * - impl_board/board_types.h
  *
- * @author Jack | R&D Dept. | EternalChip
+ * @author wuying <3553612993@qq.com>
  *
  * @brief Provide the platform base types.
  *

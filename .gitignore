@@ -24,7 +24,11 @@ Release/
 *.uvguix.*
 *.scvd
 *.dep
-
+*.crf
+*.axf
+*.sct
+*.lnp
+*.htm
 # ===== Python =====
 __pycache__/
 *.py[cod]
@@ -62,3 +66,6 @@ coredump*
 *.swp
 .DS_Store
 Thumbs.db
+
+# ===== 其他 =====
+ARCHITECTURE copy.md
