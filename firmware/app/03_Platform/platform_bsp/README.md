@@ -7,9 +7,13 @@
 | 文件 | 职责 |
 | --- | --- |
 | `platform_bsp_motor.h` | 直流电机 + 编码器：使能、带符号占空比、编码器/状态读取 |
-| `platform_bsp_servo.h` | 六轴舵机总线：六关节角度下发、状态回读 |
-| `platform_bsp_flash.h` | 外部 Flash：读/写/擦除、容量与几何信息、忙状态 |
-| `platform_bsp_temphumi.h` | 温湿度传感器：初始化、带超时的读取 |
+| `platform_bsp_servo.h` | 六轴舵机：六关节角度下发、状态回读 |
+| `platform_bsp_key.h` | 按键：去抖后的按下状态与按住时长 |
+| `platform_bsp_led.h` | 状态灯：按视觉语义开关，极性由驱动决定 |
+| `platform_bsp_buzzer.h` | 无源/有源蜂鸣器：开关，节奏由上层决定 |
+| `platform_bsp_battery.h` | 电池监测：分压还原后的电压、原始 ADC 值 |
+| `platform_bsp_flash.h` | 外部 Flash：读/写/擦除、容量与几何信息、忙状态（本板未使用） |
+| `platform_bsp_temphumi.h` | 温湿度传感器：初始化、带超时的读取（本板未使用） |
 | `platform_bsp.h` | 聚合头 |
 
 ## 三层关系
@@ -32,12 +36,16 @@
 
 对应关系：
 
-| 平台契约 | 04_Impl 适配器 | 05_BSP 具体驱动（示例） |
+| 平台契约 | 04_Impl 适配器 | 05_BSP 具体驱动 |
 | --- | --- | --- |
-| `platform_motor_ops_t` | `impl_bsp_motor.c` | 电机 PWM + 方向 GPIO + 定时器编码器 |
-| `platform_servo_ops_t` | `impl_bsp_servo.c` | 半双工串口舵机总线协议 |
-| `platform_flash_ops_t` | `impl_bsp_flash.c` | W25Q64 SPI 驱动 |
-| `platform_temphumi_ops_t` | `impl_bsp_temphumi.c` | AHT21 I2C 驱动 |
+| `platform_motor_ops_t` | `impl_bsp_motor.c` | `bsp_motor_dual_pwm.c`：双 PWM H 桥 + 定时器编码器 |
+| `platform_servo_ops_t` | `impl_bsp_servo.c` | `bsp_servo_softpwm.c`：六路 GPIO 软件 PWM |
+| `platform_key_ops_t` | `impl_bsp_key.c` | `bsp_key_gpio.c`：GPIO 按键 + 时间去抖 |
+| `platform_led_ops_t` | `impl_bsp_led.c` | `bsp_led_gpio.c`：GPIO 状态灯 |
+| `platform_buzzer_ops_t` | `impl_bsp_buzzer.c` | `bsp_buzzer_gpio.c`：GPIO 蜂鸣器 |
+| `platform_battery_ops_t` | `impl_bsp_battery.c` | `bsp_battery_adc.c`：ADC + 11 倍分压还原 |
+| `platform_flash_ops_t` | 未实现 | W25Q64 SPI 驱动（预留） |
+| `platform_temphumi_ops_t` | 未实现 | AHT21 I2C 驱动（预留） |
 
 ## 注册与生命周期
 

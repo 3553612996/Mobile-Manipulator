@@ -29,6 +29,10 @@
 
 #include "platform_bsp_motor.h"
 #include "platform_bsp_servo.h"
+#include "platform_bsp_key.h"
+#include "platform_bsp_led.h"
+#include "platform_bsp_buzzer.h"
+#include "platform_bsp_battery.h"
 #include "platform_bsp_flash.h"
 #include "platform_bsp_temphumi.h"
 

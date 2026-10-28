@@ -14,6 +14,7 @@ MCU 外设能力的统一出口。上层只认识 `platform_uart_*` / `platform_
 | `platform_mcu_adc.h` | 原始值/毫伏值读取 |
 | `platform_mcu_wdg.h` | 看门狗启动、喂狗、复位原因 |
 | `platform_mcu.h` | 聚合头，上层只包含这一个 |
+| `platform_mcu_*.c` | 只把平台接口转发给 `impl_*_wrap()`，不写任何逻辑 |
 
 ## 依赖方向
 
@@ -22,9 +23,13 @@ MCU 外设能力的统一出口。上层只认识 `platform_uart_*` / `platform_
         |
         v
 03_Platform/platform_mcu/*.h        <-- 本目录，冻结契约
+03_Platform/platform_mcu/*.c        <-- 只转发，不含任何逻辑
         |
         v
-04_Impl/impl_mcu/*.c                <-- 适配 HAL / 标准库 / 寄存器
+04_Impl/impl_wrapper/*.c            <-- 日志/插桩 + 转发
+        |
+        v
+04_Impl/impl_mcu/*.c                <-- 只做 HAL / 标准库 / 寄存器适配
         |
         v
 05_BSP / 07_Vender (STM32 HAL, CMSIS)
@@ -32,9 +37,11 @@ MCU 外设能力的统一出口。上层只认识 `platform_uart_*` / `platform_
 
 **规则：**
 
-- 本目录只放头文件，不放任何 `stm32f4xx_hal.h`。
+- 本目录的 `.h` 是冻结契约；`.c` 只做一对一转发，不放日志、校验或适配。
+- `impl_wrapper` 是 `impl_mcu` 的唯一调用方；`impl_mcu` 是唯一可以包含
+  `stm32f4xx_hal.h` 的层。
 - 上层不得直接包含 `stm32f4xx_hal.h`、`cmsis_os.h` 或具体芯片头。
-- 参数、句柄、状态码的转换全部在 `04_Impl` 完成。
+- 参数、句柄、状态码的转换全部在 `04_Impl/impl_mcu` 完成。
 
 ## 逻辑资源编号
 

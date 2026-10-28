@@ -13,7 +13,7 @@ compile_commands.json
 CMakeCache.txt
 CMakeFiles/
 
-# ===== STM32 / Keil / CubeMX =====
+# ===== STM32 / Keil / CubeMX /vscode=====
 Debug/
 Release/
 *.elf
@@ -29,6 +29,7 @@ Release/
 *.sct
 *.lnp
 *.htm
+*.vscode
 # ===== Python =====
 __pycache__/
 *.py[cod]

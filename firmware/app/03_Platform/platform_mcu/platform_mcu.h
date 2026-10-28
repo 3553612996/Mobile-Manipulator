@@ -10,6 +10,8 @@
  * - platform_mcu_i2c.h
  * - platform_mcu_pwm.h
  * - platform_mcu_adc.h
+ * - platform_mcu_encoder.h
+ * - platform_mcu_timer.h
  * - platform_mcu_wdg.h
  *
  * @author wuying <3553612993@qq.com>
@@ -36,6 +38,8 @@
 #include "platform_mcu_i2c.h"
 #include "platform_mcu_pwm.h"
 #include "platform_mcu_adc.h"
+#include "platform_mcu_encoder.h"
+#include "platform_mcu_timer.h"
 #include "platform_mcu_wdg.h"
 
 #endif /* __PLATFORM_MCU_H__ */

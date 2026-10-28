@@ -28,7 +28,7 @@
 //******************************** Defines **********************************//
 
 /*
- * Target: STM32F411 (32-bit ARM Cortex-M4F).
+ * Target: STM32F103RCT6 (32-bit ARM Cortex-M3, no FPU).
  * int64 must be long long: long is 32-bit on this ABI.
  */
 typedef signed char         int8;

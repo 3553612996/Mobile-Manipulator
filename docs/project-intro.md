@@ -29,11 +29,11 @@
 | 部分 | 硬件 | 软件 |
 | --- | --- | --- |
 | 上位机 | RK3566（4×A55，0.8 TOPS NPU） | Linux + ROS 2 Humble |
-| 下位机 | STM32F411（100MHz，128KB RAM） | FreeRTOS + C |
+| 下位机 | STM32F103RCT6（72MHz，48KB RAM） | FreeRTOS + C |
 | 建图定位 | 2D 激光雷达 | SLAM Toolbox |
 | 导航 | — | Nav2 |
 | 视觉 | 深度相机 | YOLO 自训练 + RKNN 端侧推理 |
-| 机械臂 | 六轴总线舵机 | 逆解 + 轨迹插补 |
+| 机械臂 | 六轴 PWM 舵机 | 逆解 + 轨迹插补 |
 | 交互 | 麦克风阵列 | Vosk 离线识别 |
 
 架构细节见[项目框架](architecture.md)。

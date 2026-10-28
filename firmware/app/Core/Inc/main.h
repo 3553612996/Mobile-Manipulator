@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 /* Includes ------------------------------------------------------------------*/
-#include "stm32f4xx_hal.h"
+#include "stm32f1xx_hal.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -57,6 +57,24 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define SERVO0_Pin GPIO_PIN_13
+#define SERVO0_GPIO_Port GPIOC
+#define SERVO1_Pin GPIO_PIN_14
+#define SERVO1_GPIO_Port GPIOC
+#define SERVO2_Pin GPIO_PIN_15
+#define SERVO2_GPIO_Port GPIOC
+#define SERVO3_Pin GPIO_PIN_0
+#define SERVO3_GPIO_Port GPIOC
+#define SERVO4_Pin GPIO_PIN_1
+#define SERVO4_GPIO_Port GPIOC
+#define SERVO5_Pin GPIO_PIN_2
+#define SERVO5_GPIO_Port GPIOC
+#define LED_Pin GPIO_PIN_4
+#define LED_GPIO_Port GPIOC
+#define BEEP_Pin GPIO_PIN_5
+#define BEEP_GPIO_Port GPIOC
+#define KEY_Pin GPIO_PIN_2
+#define KEY_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
