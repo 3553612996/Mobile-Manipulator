@@ -30,6 +30,9 @@ Release/
 *.lnp
 *.htm
 *.vscode
+# JLink 调试器产物：每次连接都会变，属于本机状态
+JLinkLog.txt
+JLinkSettings.ini
 # ===== Python =====
 __pycache__/
 *.py[cod]
