@@ -9,6 +9,7 @@
 | [commit-convention.md](commit-convention.md) | 提交规范：type/scope、拆分粒度、分支、标签 | v1 |
 | [coding-style.md](coding-style.md) | 编码规范：命名、单位、错误处理、ISR 约束、格式化 | v1 |
 | [testing.md](testing.md) | 自测规范：测试分层、故障注入、发版检查清单 | v1 |
+| [test-report-m2.md](test-report-m2.md) | M2 节点测试报告：环境、L1/L3 结果、缺陷记录、已知限制 | M2 通过 |
 | [ai-usage.md](ai-usage.md) | AI 使用说明：使用边界、验证要求、记录方式 | v1 |
 
 ## 维护约定
