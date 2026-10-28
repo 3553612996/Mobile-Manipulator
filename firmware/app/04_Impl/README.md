@@ -31,7 +31,7 @@ platform_gpio_init()        /* 平台契约，永不修改 */
 | --- | --- | --- |
 | `impl_wrapper/` | 调用日志、耗时统计、错误码观测；不校验参数、不转换单位 | 只包含 `platform_*` 与 `impl_mcu/*` 头 |
 | `impl_mcu/` | 逻辑资源映射、参数/单位转换、HAL/LL/寄存器调用 | 可以包含 `stm32f1xx_hal.h` |
-| `impl_bsp/` | 设备表、`platform_bsp_*.h` 的注册与分发、ops 适配 | `platform_bsp/*` 与 `05_BSP/*` 头，不包含 HAL |
+| `impl_bsp/` | 设备表、`platform_bsp_*.h` 的注册与分发、ops 适配 | `platform_bsp/*` 与 `06_BSP/*` 头，不包含 HAL |
 | `impl_board/` | 编译器基础类型、板级实例与注册（组合根） | 不包含上层业务头 |
 
 `impl_board/board_init.c` 是唯一的装配点：它填好每个 `bsp_*_t` 实例的配置
@@ -85,12 +85,12 @@ Keil Include Paths 已需要 `04_Impl`，因此：
 04_Impl/impl_mcu/impl_mcu_*.c
 04_Impl/impl_bsp/impl_bsp_*.c
 04_Impl/impl_board/board_init.c
-05_BSP/bsp_*.c
+06_BSP/bsp_*.c
 ```
 
 Include Paths 需要 `03_Platform/platform_common`、`03_Platform/platform_mcu`、
 `03_Platform/platform_bsp`、`03_Platform/platform_os`、`03_Platform/platform_middleware`、
-`04_Impl`、`05_BSP`。`main.c` 在 `USER CODE BEGIN 2` 中调用 `board_init()`，
+`04_Impl`、`06_BSP`。`main.c` 在 `USER CODE BEGIN 2` 中调用 `board_init()`，
 在 `USER CODE BEGIN Callback 1` 中把 TIM7 更新中断转发给
 `impl_timer_period_elapsed()`（全局 `HAL_TIM_PeriodElapsedCallback` 由 CubeMX
 生成，TIM6 时基也在里面）。

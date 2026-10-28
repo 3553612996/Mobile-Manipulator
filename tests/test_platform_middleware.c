@@ -1,4 +1,20 @@
-/* L1 unit test for platform_middleware. Runs on the PC, no hardware needed. */
+/* L1 unit test for platform_middleware. Runs on the PC, no hardware needed.
+ *
+ * Covers the shared algorithms every layer above uses: the lock-free ring
+ * buffer that carries UART bytes out of the interrupt, CRC-16/CCITT-FALSE, and
+ * the filters applied to sampled values.
+ *
+ * Build (MinGW or any host gcc):
+ *   gcc -std=c99 -Wall -Wextra \
+ *       -I firmware/app/03_Platform/platform_common \
+ *       -I firmware/app/04_Impl \
+ *       -I firmware/app/03_Platform/platform_middleware \
+ *       tests/test_platform_middleware.c \
+ *       firmware/app/03_Platform/platform_middleware/platform_ringbuf.c \
+ *       firmware/app/03_Platform/platform_middleware/platform_crc.c \
+ *       firmware/app/03_Platform/platform_middleware/platform_filter.c \
+ *       -o build/test_platform_middleware
+ */
 
 #include <stdio.h>
 #include "platform_ringbuf.h"

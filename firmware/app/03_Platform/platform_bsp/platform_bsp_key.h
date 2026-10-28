@@ -12,7 +12,7 @@
  * @brief Provide the platform user-key device interface.
  *
  * The key is a device, not a pin: active level, pull resistor and debounce
- * policy belong to the concrete driver in 05_BSP. Upper layers only see a
+ * policy belong to the concrete driver in 06_BSP. Upper layers only see a
  * debounced pressed flag and the time it has been held.
  *
  * Time injection: poll() takes the milliseconds elapsed since the previous

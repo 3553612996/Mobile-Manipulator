@@ -1,4 +1,4 @@
-# 05_BSP 设计说明
+# 06_BSP 设计说明
 
 具体器件的**驱动实现**。只依赖平台层（`platform_mcu_*` / `platform_os`），
 不包含 HAL、不包含 `stm32f1xx_hal.h`、不知道引脚号。
@@ -10,7 +10,7 @@
         |
 04_Impl/impl_bsp/*.c                设备表 + 注册 + 分发 + ops 适配
         |
-05_BSP/*.c  <-- 本目录               具体驱动：时序、状态机、换算
+06_BSP/*.c  <-- 本目录               具体驱动：时序、状态机、换算
         |
 03_Platform/platform_mcu/*          GPIO / PWM / ADC / 编码器 / 定时器
 ```

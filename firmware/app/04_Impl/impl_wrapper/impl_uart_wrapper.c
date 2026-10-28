@@ -117,6 +117,32 @@ platform_err_t impl_uart_get_rx_count_wrap(platform_uart_bus_t bus,
     return err;
 }
 
+platform_err_t impl_uart_rx_read_wrap(platform_uart_bus_t bus,
+                                      uint8_t *data,
+                                      uint32_t max_len,
+                                      uint32_t *out_len)
+{
+    platform_err_t err;
+
+    IMPL_TRACE_ENTER("platform_uart_rx_read");
+    err = impl_uart_rx_read(bus, data, max_len, out_len);
+    IMPL_TRACE_EXIT("platform_uart_rx_read", err);
+
+    return err;
+}
+
+platform_err_t impl_uart_rx_available_wrap(platform_uart_bus_t bus,
+                                           uint32_t *count)
+{
+    platform_err_t err;
+
+    IMPL_TRACE_ENTER("platform_uart_rx_available");
+    err = impl_uart_rx_available(bus, count);
+    IMPL_TRACE_EXIT("platform_uart_rx_available", err);
+
+    return err;
+}
+
 platform_err_t impl_uart_register_event_cb_wrap(
                                         platform_uart_bus_t bus,
                                         platform_uart_event_cb_t callback,

@@ -5,7 +5,7 @@
  *
  * @par dependencies
  * - platform_bsp_motor.h
- * - 05_BSP/bsp_motor_dual_pwm.h
+ * - 06_BSP/bsp_motor_dual_pwm.h
  *
  * @author wuying <3553612993@qq.com>
  *

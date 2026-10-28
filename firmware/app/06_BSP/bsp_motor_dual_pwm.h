@@ -22,7 +22,9 @@
  * held at full compare and the other is chopped. The whole board is wired so
  * that input B high / input A chopped turns the wheel "forward"; a wheel that
  * is mounted mirrored is corrected with cfg.invert_direction instead of
- * changing the control layer.
+ * changing the control layer. An encoder whose A/B pair is wired the other way
+ * round is corrected with cfg.invert_encoder, so the count sign always agrees
+ * with the drive sign.
  *
  * The driver owns no clock and no pin: PWM and encoder channels are logical
  * platform resources, so the same code would run on another board as long as
@@ -53,6 +55,18 @@
 /*
  * Wiring of one motor. The two PWM channels are the H-bridge inputs, the encoder
  * channel is the quadrature timer that counts the wheel.
+ *
+ * invert_direction and invert_encoder describe two independent facts about the
+ * hardware and must not be folded into one flag:
+ *
+ *   invert_direction : the wheel is mounted rotated 180 degrees. Flips the
+ *                      drive *and* the count, so positive duty still means
+ *                      positive count.
+ *   invert_encoder   : the encoder's A/B pair is wired opposite to the motor
+ *                      terminals. Flips the count only.
+ *
+ * With both applied correctly, "positive duty" and "positive count" always
+ * describe the same physical direction, which is what the speed loop needs.
  */
 typedef struct
 {
@@ -60,6 +74,7 @@ typedef struct
     platform_pwm_channel_t      pwm_reverse;    /* Chopped input for duty < 0. */
     platform_encoder_channel_t  encoder;
     platform_bool_t             invert_direction;
+    platform_bool_t             invert_encoder;
     uint32_t                    pwm_frequency_hz;
 } bsp_motor_dual_pwm_cfg_t;
 

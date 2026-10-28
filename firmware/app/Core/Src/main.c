@@ -29,6 +29,7 @@
 
 #include "impl_mcu/impl_mcu_timer.h"
 #include "impl_board/board_init.h"
+#include "app_robot/app_robot.h"
 
 /* USER CODE END Includes */
 
@@ -109,7 +110,19 @@ int main(void)
    * Register the board devices (motors, servos, key, LED, buzzer, battery) and
    * initialize the ones needed before the control tasks start.
    */
-  (void)board_init();
+  if (board_init() != PLATFORM_ERR_OK)
+  {
+    Error_Handler();
+  }
+
+  /*
+   * Bring up the host link (USART3 + DMA ring) and the services. No tasks are
+   * created here: app_robot_start() does that from the first FreeRTOS task.
+   */
+  if (app_robot_init() != PLATFORM_ERR_OK)
+  {
+    Error_Handler();
+  }
 
   /* USER CODE END 2 */
 

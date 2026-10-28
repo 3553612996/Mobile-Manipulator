@@ -64,7 +64,7 @@
 #define configTICK_RATE_HZ                       ((TickType_t)1000)
 #define configMAX_PRIORITIES                     ( 56 )
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
-#define configTOTAL_HEAP_SIZE                    ((size_t)3072)
+#define configTOTAL_HEAP_SIZE                    ((size_t)8192)
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configUSE_TRACE_FACILITY                 1
 #define configUSE_16_BIT_TICKS                   0
@@ -147,7 +147,16 @@ standard names. */
 #define USE_CUSTOM_SYSTICK_HANDLER_IMPLEMENTATION 0
 
 /* USER CODE BEGIN Defines */
-/* Section where parameter definitions can be added (for instance, to override default ones in FreeRTOS.h) */
+/*
+ * configTOTAL_HEAP_SIZE is 8192 and is owned by CubeMX (app.ioc,
+ * FREERTOS.configTOTAL_HEAP_SIZE), so regenerating the code keeps it.
+ *
+ * Why 8192: idle (512) + timer (1024) + defaultTask (512) + key test (384) +
+ * motor test (640) + encoder test (640) plus one TCB each already exceed the
+ * 3072 the template ships with, and a failed osThreadNew is silent -- the task
+ * simply never runs. The part has 48 KB of RAM and about 13.7 KB of it is
+ * static data, so the extra 5 KB is cheap.
+ */
 /* USER CODE END Defines */
 
 #endif /* FREERTOS_CONFIG_H */

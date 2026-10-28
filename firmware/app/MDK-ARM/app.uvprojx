@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F103xE</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM3;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;../03_Platform/platform_common;../03_Platform/platform_mcu;../03_Platform/platform_bsp;../03_Platform/platform_os;../03_Platform/platform_middleware;../04_Impl;../05_BSP</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM3;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;../03_Platform/platform_common;../03_Platform/platform_mcu;../03_Platform/platform_bsp;../03_Platform/platform_os;../03_Platform/platform_middleware;../04_Impl;../06_BSP;../01_APP;../02_Service;../05_Middlewares;../05_Middlewares/protocol</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -358,7 +358,7 @@
               <MiscControls></MiscControls>
               <Define></Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM3;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;../03_Platform/platform_common;../03_Platform/platform_mcu;../03_Platform/platform_bsp;../03_Platform/platform_os;../03_Platform/platform_middleware;../04_Impl;../05_BSP</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM3;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;../03_Platform/platform_common;../03_Platform/platform_mcu;../03_Platform/platform_bsp;../03_Platform/platform_os;../03_Platform/platform_middleware;../04_Impl;../06_BSP;../01_APP;../02_Service;../05_Middlewares;../05_Middlewares/protocol</IncludePath>
             </VariousControls>
           </Aads>
           <LDads>
@@ -823,6 +823,11 @@
               <FileType>1</FileType>
               <FilePath>../03_Platform/platform_mcu/platform_mcu_timer.c</FilePath>
             </File>
+            <File>
+              <FileName>platform_mcu_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../03_Platform/platform_mcu/platform_mcu_uart.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -853,6 +858,11 @@
               <FileType>1</FileType>
               <FilePath>../04_Impl/impl_wrapper/impl_timer_wrapper.c</FilePath>
             </File>
+            <File>
+              <FileName>impl_uart_wrapper.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../04_Impl/impl_wrapper/impl_uart_wrapper.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -882,6 +892,11 @@
               <FileName>impl_mcu_timer.c</FileName>
               <FileType>1</FileType>
               <FilePath>../04_Impl/impl_mcu/impl_mcu_timer.c</FilePath>
+            </File>
+            <File>
+              <FileName>impl_mcu_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../04_Impl/impl_mcu/impl_mcu_uart.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -936,32 +951,112 @@
             <File>
               <FileName>bsp_battery_adc.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../05_BSP/bsp_battery_adc.c</FilePath>
+              <FilePath>../06_BSP/bsp_battery_adc.c</FilePath>
             </File>
             <File>
               <FileName>bsp_buzzer_gpio.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../05_BSP/bsp_buzzer_gpio.c</FilePath>
+              <FilePath>../06_BSP/bsp_buzzer_gpio.c</FilePath>
             </File>
             <File>
               <FileName>bsp_key_gpio.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../05_BSP/bsp_key_gpio.c</FilePath>
+              <FilePath>../06_BSP/bsp_key_gpio.c</FilePath>
             </File>
             <File>
               <FileName>bsp_led_gpio.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../05_BSP/bsp_led_gpio.c</FilePath>
+              <FilePath>../06_BSP/bsp_led_gpio.c</FilePath>
             </File>
             <File>
               <FileName>bsp_motor_dual_pwm.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../05_BSP/bsp_motor_dual_pwm.c</FilePath>
+              <FilePath>../06_BSP/bsp_motor_dual_pwm.c</FilePath>
             </File>
             <File>
               <FileName>bsp_servo_softpwm.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../05_BSP/bsp_servo_softpwm.c</FilePath>
+              <FilePath>../06_BSP/bsp_servo_softpwm.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Platform/Middleware</GroupName>
+          <Files>
+            <File>
+              <FileName>platform_crc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../03_Platform/platform_middleware/platform_crc.c</FilePath>
+            </File>
+            <File>
+              <FileName>platform_ringbuf.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../03_Platform/platform_middleware/platform_ringbuf.c</FilePath>
+            </File>
+            <File>
+              <FileName>platform_filter.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../03_Platform/platform_middleware/platform_filter.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Middleware/Protocol</GroupName>
+          <Files>
+            <File>
+              <FileName>protocol_def.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../05_Middlewares/protocol/protocol_def.c</FilePath>
+            </File>
+            <File>
+              <FileName>protocol_codec.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../05_Middlewares/protocol/protocol_codec.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Impl/OS</GroupName>
+          <Files>
+            <File>
+              <FileName>impl_os.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../04_Impl/impl_os/impl_os.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Service</GroupName>
+          <Files>
+            <File>
+              <FileName>service_key.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../02_Service/service_key/service_key.c</FilePath>
+            </File>
+            <File>
+              <FileName>service_chassis.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../02_Service/service_chassis/service_chassis.c</FilePath>
+            </File>
+            <File>
+              <FileName>service_arm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../02_Service/service_arm/service_arm.c</FilePath>
+            </File>
+            <File>
+              <FileName>service_proto.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../02_Service/service_proto/service_proto.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>App</GroupName>
+          <Files>
+            <File>
+              <FileName>app_robot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_robot.c</FilePath>
             </File>
           </Files>
         </Group>

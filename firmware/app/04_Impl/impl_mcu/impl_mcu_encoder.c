@@ -78,7 +78,6 @@ platform_err_t impl_encoder_init(const platform_encoder_cfg_t *cfg)
 {
     TIM_Encoder_InitTypeDef       s_config = { 0 };
     impl_encoder_ctx_t           *ctx;
-    uint32_t                      polarity;
 
     if (cfg == NULL)
     {
@@ -99,18 +98,23 @@ platform_err_t impl_encoder_init(const platform_encoder_cfg_t *cfg)
     /* Clock, GPIO alternate function and GPIO pull-ups are CubeMX-owned. */
     ctx->cube_init();
 
-    polarity                  = (cfg->invert == PLATFORM_TRUE)
-                              ? TIM_ICPOLARITY_FALLING
-                              : TIM_ICPOLARITY_RISING;
-    s_config.EncoderMode      = TIM_ENCODERMODE_TI12;
-    s_config.IC1Polarity      = polarity;
-    s_config.IC1Selection     = TIM_ICSELECTION_DIRECTTI;
-    s_config.IC1Prescaler     = TIM_ICPSC_DIV1;
-    s_config.IC1Filter        = cfg->filter;
-    s_config.IC2Polarity      = polarity;
-    s_config.IC2Selection     = TIM_ICSELECTION_DIRECTTI;
-    s_config.IC2Prescaler     = TIM_ICPSC_DIV1;
-    s_config.IC2Filter        = cfg->filter;
+    /*
+     * Direction follows the lead/lag relation of the two inputs, so reversing
+     * it means making the inputs disagree: only IC1 is inverted. Inverting
+     * both would shift the pair by half a period and leave the direction
+     * unchanged, which is the trap this mapping exists to avoid.
+     */
+    s_config.EncoderMode  = TIM_ENCODERMODE_TI12;
+    s_config.IC1Polarity  = (cfg->invert == PLATFORM_TRUE)
+                            ? TIM_ICPOLARITY_FALLING
+                            : TIM_ICPOLARITY_RISING;
+    s_config.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+    s_config.IC1Prescaler = TIM_ICPSC_DIV1;
+    s_config.IC1Filter    = cfg->filter;
+    s_config.IC2Polarity  = TIM_ICPOLARITY_RISING;
+    s_config.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+    s_config.IC2Prescaler = TIM_ICPSC_DIV1;
+    s_config.IC2Filter    = cfg->filter;
 
     /*
      * The F1 HAL has no per-channel encoder configuration: the filter and the

@@ -28,6 +28,10 @@
  *
  * For every wheel the "reverse" input is the one the vendor holds at full
  * compare; the "forward" input is chopped (see bsp_motor_dual_pwm.h).
+ * Wheels B and D are mounted turned around, so their invert_direction is set:
+ * with the same positive duty all four wheels then roll the vehicle forward.
+ * All four encoder A/B pairs are wired opposite to their motor terminals, so
+ * invert_encoder is set everywhere and a forward roll counts positive.
  *
  * @version V1.0 2026-10-28
  *
@@ -68,9 +72,11 @@
 
 typedef struct
 {
-    uint8_t pwm_forward;
-    uint8_t pwm_reverse;
-    uint8_t encoder;
+    uint8_t         pwm_forward;
+    uint8_t         pwm_reverse;
+    uint8_t         encoder;
+    platform_bool_t invert_direction;
+    platform_bool_t invert_encoder;
 } board_motor_wiring_t;
 
 //******************************** Variables ********************************//
@@ -85,13 +91,35 @@ static bsp_battery_adc_t    s_battery;
 /*
  * pwm_forward is the bridge input the vendor chops for a positive speed, i.e.
  * the channel that gets "1000 - duty" permille.
+ *
+ * invert_direction records the mounting, not the algorithm: B and D sit on the
+ * opposite side of the chassis and are turned around, so the same electrical
+ * "forward" drives the vehicle backwards.  Bench test 2026-10-28: with
+ * +300 permille on every wheel only A and C rolled the vehicle forward.
+ *
+ * It flips the encoder count as well, so "positive duty means increasing
+ * count" still holds for every wheel and the control layer needs no per-wheel
+ * sign. Swapping the two PWM channels instead would not do: the drive would
+ * reverse while the encoder kept its old sign.
+ *
+ * invert_encoder records the harness: every wheel's encoder A/B pair is wired
+ * opposite to its motor terminals, so after the mounting correction above all
+ * four wheels still counted negative when rolling forward (bench test
+ * 2026-10-28).  The mismatch is uniform, so it is a harness fact and not a
+ * per-wheel wiring error.  Flipping it here keeps "forward = positive" for the
+ * count as well as for the drive; without it a speed loop would close with
+ * positive feedback.
  */
 static const board_motor_wiring_t s_motor_wiring[BOARD_MOTOR_COUNT] =
 {
-    { PLATFORM_PWM_CHANNEL_0, PLATFORM_PWM_CHANNEL_1, PLATFORM_ENCODER_CHANNEL_3 }, /* A */
-    { PLATFORM_PWM_CHANNEL_2, PLATFORM_PWM_CHANNEL_3, PLATFORM_ENCODER_CHANNEL_2 }, /* B */
-    { PLATFORM_PWM_CHANNEL_5, PLATFORM_PWM_CHANNEL_6, PLATFORM_ENCODER_CHANNEL_1 }, /* C */
-    { PLATFORM_PWM_CHANNEL_4, PLATFORM_PWM_CHANNEL_7, PLATFORM_ENCODER_CHANNEL_0 }, /* D */
+    /* A */ { PLATFORM_PWM_CHANNEL_0, PLATFORM_PWM_CHANNEL_1,
+              PLATFORM_ENCODER_CHANNEL_3, PLATFORM_FALSE, PLATFORM_TRUE },
+    /* B */ { PLATFORM_PWM_CHANNEL_2, PLATFORM_PWM_CHANNEL_3,
+              PLATFORM_ENCODER_CHANNEL_2, PLATFORM_TRUE,  PLATFORM_TRUE },
+    /* C */ { PLATFORM_PWM_CHANNEL_5, PLATFORM_PWM_CHANNEL_6,
+              PLATFORM_ENCODER_CHANNEL_1, PLATFORM_FALSE, PLATFORM_TRUE },
+    /* D */ { PLATFORM_PWM_CHANNEL_4, PLATFORM_PWM_CHANNEL_7,
+              PLATFORM_ENCODER_CHANNEL_0, PLATFORM_TRUE,  PLATFORM_TRUE },
 };
 
 static const platform_gpio_t s_servo_pin[BSP_SERVO_JOINT_COUNT] =
@@ -116,13 +144,9 @@ static platform_err_t board_register_motors(void)
         s_motor[i].cfg.pwm_forward      = s_motor_wiring[i].pwm_forward;
         s_motor[i].cfg.pwm_reverse      = s_motor_wiring[i].pwm_reverse;
         s_motor[i].cfg.encoder          = s_motor_wiring[i].encoder;
+        s_motor[i].cfg.invert_direction = s_motor_wiring[i].invert_direction;
+        s_motor[i].cfg.invert_encoder   = s_motor_wiring[i].invert_encoder;
         s_motor[i].cfg.pwm_frequency_hz = BSP_MOTOR_PWM_FREQUENCY_HZ;
-        /*
-         * The wheels are mounted mirrored on the chassis. Rather than guess the
-         * sign here, every wheel starts with the electrical convention and the
-         * control layer flips a wheel with invert_direction after a bench test.
-         */
-        s_motor[i].cfg.invert_direction = PLATFORM_FALSE;
 
         err = platform_motor_register((platform_motor_id_t)i,
                                       &impl_bsp_motor_ops,

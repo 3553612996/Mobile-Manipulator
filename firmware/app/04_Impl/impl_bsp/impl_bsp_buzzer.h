@@ -5,7 +5,7 @@
  *
  * @par dependencies
  * - platform_bsp_buzzer.h
- * - 05_BSP/bsp_buzzer_gpio.h
+ * - 06_BSP/bsp_buzzer_gpio.h
  *
  * @author wuying <3553612993@qq.com>
  *

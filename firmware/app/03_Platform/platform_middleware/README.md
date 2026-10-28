@@ -23,7 +23,7 @@
 platform_common (platform_type.h / platform_def.h / platform_error.h)
 ```
 
-中间件不依赖 `04_Impl`、`05_BSP`、`07_Vender`。
+中间件不依赖 `04_Impl`、`06_BSP`、`07_Vender`。
 
 ## 环形缓冲区
 

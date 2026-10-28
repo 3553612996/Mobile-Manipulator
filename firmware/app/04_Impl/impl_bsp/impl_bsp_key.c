@@ -5,7 +5,7 @@
  *
  * @par dependencies
  * - impl_bsp/impl_bsp_key.h
- * - 05_BSP/bsp_key_gpio.h
+ * - 06_BSP/bsp_key_gpio.h
  *
  * @author wuying <3553612993@qq.com>
  *
