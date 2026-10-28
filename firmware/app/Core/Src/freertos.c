@@ -29,6 +29,7 @@
 #include "platform_bsp_key.h"
 #include "platform_bsp_led.h"
 #include "platform_bsp_buzzer.h"
+#include "platform_bsp_motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +49,17 @@
    又不会让人觉得"按了没反应" */
 #define KEY_TEST_PERIOD_MS       10U
 #define KEY_TEST_STACK_WORDS     96U
+
+/* 四电机台架测试：一次只驱动一个轮子，正反各转 1.5 s，记录四个编码器的增量。
+   300‰ 是能看清转向又不至于让架空的车跳起来的力度 */
+#define MOTOR_TEST_MOTOR_COUNT   4U
+#define MOTOR_TEST_DUTY          ((int16_t)300)
+#define MOTOR_TEST_RUN_MS        1500U
+#define MOTOR_TEST_BRAKE_MS      200U
+#define MOTOR_TEST_REST_MS       700U
+#define MOTOR_TEST_PASS_GAP_MS   5000U
+#define MOTOR_TEST_LINE_MAX      96U
+#define MOTOR_TEST_STACK_WORDS   160U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -74,6 +86,13 @@ static const osThreadAttr_t g_key_test_task_attributes = {
   .stack_size = KEY_TEST_STACK_WORDS * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+
+/* 电机测试任务的栈要放得下行缓冲（96 字节）和 HAL 发送的局部变量 */
+static const osThreadAttr_t g_motor_test_task_attributes = {
+  .name = "motorTestTask",
+  .stack_size = MOTOR_TEST_STACK_WORDS * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -86,6 +105,7 @@ const osThreadAttr_t defaultTask_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 void StartKeyTestTask(void *argument);
+void StartMotorTestTask(void *argument);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -124,6 +144,7 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   (void)osThreadNew(StartKeyTestTask, NULL, &g_key_test_task_attributes);
+  (void)osThreadNew(StartMotorTestTask, NULL, &g_motor_test_task_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -226,6 +247,176 @@ void StartKeyTestTask(void *argument)
     }
 
     osDelay(KEY_TEST_PERIOD_MS);
+  }
+}
+
+/* ----------------------------- 四电机台架测试 ----------------------------- */
+
+static uint16_t motor_test_append_str(char *buf, uint16_t pos,
+                                      const char *text)
+{
+  while ((*text != '\0') && (pos < MOTOR_TEST_LINE_MAX))
+  {
+    buf[pos] = *text;
+    pos++;
+    text++;
+  }
+
+  return pos;
+}
+
+static uint16_t motor_test_append_i32(char *buf, uint16_t pos, int32_t value)
+{
+  char     digits[11];
+  uint8_t  count = 0U;
+  uint32_t magnitude;
+
+  if (value < 0)
+  {
+    if (pos < MOTOR_TEST_LINE_MAX)
+    {
+      buf[pos] = '-';
+      pos++;
+    }
+    /* 先加一再取反，INT32_MIN 也不会溢出 */
+    magnitude = (uint32_t)(-(value + 1)) + 1U;
+  }
+  else
+  {
+    magnitude = (uint32_t)value;
+  }
+
+  do
+  {
+    digits[count] = (char)('0' + (magnitude % 10U));
+    count++;
+    magnitude /= 10U;
+  } while ((magnitude != 0U) && (count < (uint8_t)sizeof(digits)));
+
+  while ((count > 0U) && (pos < MOTOR_TEST_LINE_MAX))
+  {
+    count--;
+    buf[pos] = digits[count];
+    pos++;
+  }
+
+  return pos;
+}
+
+static void motor_test_write(const char *buf, uint16_t len)
+{
+  (void)HAL_UART_Transmit(&huart3, (uint8_t *)buf, len, UART_TEST_TIMEOUT_MS);
+}
+
+static void motor_test_send(const char *text)
+{
+  uint16_t len = 0U;
+
+  while ((text[len] != '\0') && (len < MOTOR_TEST_LINE_MAX))
+  {
+    len++;
+  }
+
+  motor_test_write(text, len);
+}
+
+/* 四个编码器都读一遍。读的动作本身会把硬件计数累加进来，所以每次读数
+   都代表"上次读到现在"的增量 */
+static void motor_test_read_all(int32_t counts[MOTOR_TEST_MOTOR_COUNT])
+{
+  platform_motor_id_t id;
+
+  for (id = 0u; id < MOTOR_TEST_MOTOR_COUNT; id++)
+  {
+    counts[id] = 0;
+    (void)platform_motor_get_encoder(id, &counts[id]);
+  }
+}
+
+static void motor_test_phase(platform_motor_id_t id, int16_t duty)
+{
+  int32_t  before[MOTOR_TEST_MOTOR_COUNT];
+  int32_t  after[MOTOR_TEST_MOTOR_COUNT];
+  char     line[MOTOR_TEST_LINE_MAX];
+  uint16_t pos;
+  uint8_t  m;
+
+  motor_test_read_all(before);
+
+  (void)platform_motor_set_enable(id, PLATFORM_TRUE);
+  (void)platform_motor_set_duty(id, duty);
+  osDelay(MOTOR_TEST_RUN_MS);
+
+  /* 先刹车再读数：失能是滑行，轮子会再转一会儿，那部分会算进下一次测量 */
+  (void)platform_motor_set_duty(id, 0);
+  osDelay(MOTOR_TEST_BRAKE_MS);
+  (void)platform_motor_set_enable(id, PLATFORM_FALSE);
+
+  motor_test_read_all(after);
+
+  pos = motor_test_append_str(line, 0U, "[motor] ");
+  line[pos] = (char)('A' + id);
+  pos++;
+  pos = motor_test_append_str(line, pos, (duty > 0) ? " fwd  " : " rev  ");
+
+  for (m = 0U; m < MOTOR_TEST_MOTOR_COUNT; m++)
+  {
+    line[pos] = (char)('A' + m);
+    pos++;
+    line[pos] = ':';
+    pos++;
+    pos = motor_test_append_i32(line, pos, after[m] - before[m]);
+
+    if ((m + 1U) < MOTOR_TEST_MOTOR_COUNT)
+    {
+      line[pos] = ' ';
+      pos++;
+    }
+  }
+
+  line[pos] = '\r';
+  pos++;
+  line[pos] = '\n';
+  pos++;
+
+  motor_test_write(line, pos);
+}
+
+/**
+  * @brief  四电机台架测试任务。
+  * @note   一次只驱动一个轮子，正反各 1.5 s，每行打印四个编码器的增量。
+  *         看两件事：
+  *         1) 被驱动的轮子对应的那个编码器有没有数、正反号是否稳定；
+  *         2) 其他三个是否为 0——不为 0 说明编码器通道接错了轮子。
+  *         方向对不对（+300 是否让车往前）只能靠眼睛看，反了就把
+  *         board_init.c 里那个电机的 invert_direction 改成 TRUE。
+  */
+void StartMotorTestTask(void *argument)
+{
+  platform_motor_id_t id;
+
+  (void)argument;
+
+  /* 等串口和调度稳定，再开始动电机 */
+  osDelay(1000U);
+
+  motor_test_send("\r\n[motor] bench test: duty +/-300 permille\r\n");
+  motor_test_send("[motor] WHEELS MUST BE OFF THE GROUND\r\n");
+  motor_test_send("[motor] line = wheel/direction, then A-D encoder deltas\r\n");
+
+  for (;;)
+  {
+    for (id = 0u; id < MOTOR_TEST_MOTOR_COUNT; id++)
+    {
+      motor_test_phase(id, MOTOR_TEST_DUTY);
+      osDelay(MOTOR_TEST_REST_MS);
+
+      motor_test_phase(id, (int16_t)(-MOTOR_TEST_DUTY));
+      osDelay(MOTOR_TEST_REST_MS);
+    }
+
+    motor_test_send("[motor] pass done, all motors disabled\r\n");
+    osDelay(MOTOR_TEST_PASS_GAP_MS);
   }
 }
 

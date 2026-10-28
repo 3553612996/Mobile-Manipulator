@@ -64,7 +64,16 @@
 #define configTICK_RATE_HZ                       ((TickType_t)1000)
 #define configMAX_PRIORITIES                     ( 56 )
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
-#define configTOTAL_HEAP_SIZE                    ((size_t)3072)
+/*
+ * 3072 is not enough once the bench-test tasks exist: idle (512) + timer
+ * (1024) + defaultTask (512) + key (384) + motor (640) already exceed it,
+ * and a failed xTaskCreate only makes a task silently not run. The F103 has
+ * 48 KB of RAM and 8.5 KB of it is used, so 8 KB here is cheap.
+ * NOTE: CubeMX regenerates this file. Set TOTAL_HEAP_SIZE = 8192 in
+ * Middleware -> FREERTOS -> Config parameters -> Memory management settings,
+ * otherwise the next "Generate Code" resets it to 3072.
+ */
+#define configTOTAL_HEAP_SIZE                    ((size_t)8192)
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configUSE_TRACE_FACILITY                 1
 #define configUSE_16_BIT_TICKS                   0
