@@ -71,5 +71,8 @@ coredump*
 .DS_Store
 Thumbs.db
 
+# ===== 厂商参考代码：只做移植依据，不入库 =====
+firmware/商家源代码/
+
 # ===== 其他 =====
 ARCHITECTURE copy.md
