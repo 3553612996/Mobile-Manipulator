@@ -2,7 +2,7 @@
 
 模块级视角：包怎么划分、接口怎么定、状态机怎么转、并发怎么管、错误怎么处理。
 
-相关文档：[项目框架](architecture.md) · [串口协议](protocol.md) · [编码规范](coding-style.md)
+相关文档：[项目框架](overview.md) · [串口协议](protocol.md) · [编码规范](../conventions/coding-style.md)
 
 ---
 

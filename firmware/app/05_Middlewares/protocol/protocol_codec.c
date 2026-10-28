@@ -249,7 +249,8 @@ uint32_t protocol_encode(uint8_t cmd,
         (void)memcpy(&out[5], payload, (size_t)payload_len);
     }
 
-    /* CRC covers LEN..payload, as specified in docs/protocol.md section 6. */
+    /* CRC covers LEN..payload, as specified in
+     * docs/architecture/protocol.md section 6. */
     crc = (uint32_t)platform_crc16_ccitt(&out[2], len_field + 1u);
     out[3u + len_field] = (uint8_t)(crc & 0xFFu);
     out[4u + len_field] = (uint8_t)((crc >> 8) & 0xFFu);

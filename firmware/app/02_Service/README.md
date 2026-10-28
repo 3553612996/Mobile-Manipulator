@@ -79,7 +79,7 @@ gcc -std=c99 -Wall -Wextra \
     -I firmware/app/04_Impl \
     -I firmware/app/03_Platform/platform_bsp \
     -I firmware/app/02_Service/service_chassis \
-    tests/test_service_chassis.c \
+    tests/unit/service/test_service_chassis.c \
     firmware/app/02_Service/service_chassis/service_chassis.c \
     -o build/test_service_chassis -lm
 
@@ -88,9 +88,9 @@ gcc -std=c99 -Wall -Wextra \
     -I firmware/app/04_Impl \
     -I firmware/app/03_Platform/platform_bsp \
     -I firmware/app/02_Service/service_key \
-    tests/test_service_key.c \
+    tests/unit/service/test_service_key.c \
     firmware/app/02_Service/service_key/service_key.c \
     -o build/test_service_key
 ```
 
-协议服务的编译命令见 `tests/test_service_proto.c` 文件头。
+协议服务的编译命令见 `tests/unit/service/test_service_proto.c` 文件头。

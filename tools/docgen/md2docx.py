@@ -6,8 +6,12 @@ other, and they render on GitHub.  This script only produces a Word copy for
 reading, printing or sending to someone who expects a .docx.
 
 Usage:
-    python tools/md2docx.py                 # docs/*.md -> docs/word/*.docx
-    python tools/md2docx.py a.md b.md       # explicit files
+    python tools/docgen/md2docx.py          # docs/**/*.md -> docs/word/**/*.docx
+    python tools/docgen/md2docx.py a.md b.md  # explicit files
+
+The docs/ tree is mirrored under docs/word/ (architecture/overview.md becomes
+docs/word/architecture/overview.docx), so two README.md in different folders
+cannot clobber each other.
 
 Requires python-docx (pip install python-docx).
 """
@@ -27,7 +31,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]   # tools/docgen/ -> repo root
 DOCS = ROOT / "docs"
 OUT = DOCS / "word"
 
@@ -508,17 +512,23 @@ def convert(md_path, out_path):
 
 def main(argv):
     if argv:
-        sources = [Path(arg) for arg in argv]
+        # resolve() so a relative CLI path can still be placed with
+        # relative_to(DOCS) below.
+        sources = [Path(arg).resolve() for arg in argv]
     else:
-        sources = sorted(DOCS.glob("*.md"))
+        # rglob, not glob: the docs tree is split into architecture/,
+        # conventions/ and nodes/<id>/, and the output mirrors it.
+        sources = sorted(DOCS.rglob("*.md"))
 
     OUT.mkdir(parents=True, exist_ok=True)
     for source in sources:
         if "copy" in source.stem.lower():
             continue
-        target = OUT / f"{source.stem}.docx"
+        target = OUT / source.relative_to(DOCS).with_suffix(".docx")
+        target.parent.mkdir(parents=True, exist_ok=True)
         title = convert(source, target)
-        print(f"{source.name:24s} -> {target.relative_to(ROOT)}  ({title})")
+        print(f"{str(source.relative_to(DOCS)):32s} -> "
+              f"{target.relative_to(ROOT)}  ({title})")
 
 
 if __name__ == "__main__":

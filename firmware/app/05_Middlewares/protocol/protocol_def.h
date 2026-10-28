@@ -8,7 +8,7 @@
  *
  * @author wuying <3553612993@qq.com>
  *
- * @brief Define the wire protocol table (docs/protocol.md v1).
+ * @brief Define the wire protocol table (docs/architecture/protocol.md v1).
  *
  * This file is the single source of truth for frame constants, command and
  * report identifiers, payload lengths, result codes, fault codes and the
@@ -48,7 +48,8 @@
 #define PROTOCOL_CMD_MAX                ((uint8_t)0x3Fu)
 #define PROTOCOL_REPORT_MIN             ((uint8_t)0xC0u)
 
-/* Parser resets if two bytes are further apart than this (docs/protocol.md 9). */
+/* Parser resets if two bytes are further apart than this
+ * (docs/architecture/protocol.md 9). */
 #define PROTOCOL_RX_GAP_RESET_MS        ((uint32_t)50u)
 
 /* Status byte of REPORT_STATUS / REPORT_HEARTBEAT. */
@@ -111,7 +112,7 @@ typedef enum
 #define PROTOCOL_LEN_REPORT_EVENT       ((uint8_t)6u)
 #define PROTOCOL_LEN_REPORT_HEARTBEAT   ((uint8_t)3u)
 
-/* Fault / event codes (docs/protocol.md 8). */
+/* Fault / event codes (docs/architecture/protocol.md 8). */
 #define PROTOCOL_FAULT_OVERCURRENT      ((uint16_t)0x0101u)
 #define PROTOCOL_FAULT_ENCODER          ((uint16_t)0x0102u)
 #define PROTOCOL_FAULT_CRC_LIMIT        ((uint16_t)0x0201u)
@@ -125,7 +126,8 @@ typedef enum
 
 #define PROTOCOL_CLEAR_ALL_FAULTS       ((uint16_t)0xFFFFu)
 
-/* Fault severity (docs/protocol.md 8). A larger value outranks a smaller one. */
+/* Fault severity (docs/architecture/protocol.md 8).
+ * A larger value outranks a smaller one. */
 typedef enum
 {
     PROTOCOL_SEVERITY_NONE = 0,
@@ -134,7 +136,7 @@ typedef enum
     PROTOCOL_SEVERITY_FATAL
 } protocol_severity_t;
 
-/* SET_PARAM ids (docs/protocol.md 5.4). */
+/* SET_PARAM ids (docs/architecture/protocol.md 5.4). */
 #define PROTOCOL_PARAM_WHEEL_BASE       ((uint8_t)0x01u)
 #define PROTOCOL_PARAM_WHEEL_DIAMETER   ((uint8_t)0x02u)
 #define PROTOCOL_PARAM_CMD_TIMEOUT      ((uint8_t)0x10u)

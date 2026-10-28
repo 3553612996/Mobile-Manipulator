@@ -126,10 +126,12 @@ RK3566
 | `03_Platform` | 稳定接口：`platform_*` 设备/OS 契约，以及通用算法（环形缓冲、CRC、滤波） | 无（只定义） |
 | `04_Impl` | 把 03 的契约落到具体实现：HAL 适配、FreeRTOS 适配、板级设备实例化 | HAL、FreeRTOS、BSP |
 | `05_Middlewares` | 与产品契约相关的中间件：串口协议表与编解码 | 03 的 platform_common + CRC |
-| `06_BSP` | 具体芯片/模块驱动：双 PWM 电机、软件 PWM 舵机、ADC、GPIO | HAL |
+| `06_BSP` | 具体芯片/模块驱动：双 PWM 电机、软件 PWM 舵机、ADC、GPIO | Platform 的 `platform_mcu`（不直接碰 HAL） |
 | `07_Toolchain` / `08_Vender` / `99_Utils` | 工具链、厂商参考代码、通用宏与工具 | 无 |
 
 **依赖只向下**：`01_APP → 02_Service → 03_Platform → 04_Impl → 06_BSP`。app 里不允许出现 `HAL_*`、`FreeRTOS.h`、寄存器名；service 里不允许包含板级头文件。
+
+例外只有一个，而且是结构性的：`06_BSP` 的驱动通过 `03_Platform/platform_mcu` 的 `platform_*` 接口访问外设，而 `platform_mcu` 只是对 `04_Impl/impl_*_wrap` 的薄转发。所以物理调用链在 `04_Impl` 与 `06_BSP` 之间折返一次：`impl_bsp_motor → bsp_motor_dual_pwm → platform_pwm_set_duty → impl_pwm_set_duty_wrap → HAL`。这样 BSP 不直接依赖 HAL 句柄，换 MCU 时只改 `impl_mcu`。逐文件的检查结果见 [M2 架构分层检查](../nodes/m2/layering-audit.md)。
 
 **为什么协议解析在 service 不在 app**：解帧、CRC、ACK、SEQ 去重是协议的实现，不是业务逻辑。换一个上位机或换一个应用，这套通信行为要原样复用；放在 `service_proto` 后，app 只需注册"收到 SET_ENABLE 干什么"，协议本身可以在 PC 上用内存管道单测。协议表本身（命令字、负载长度、故障码）再下沉到 `05_Middlewares/protocol`，由固件、上位机和测试共享同一份定义。
 

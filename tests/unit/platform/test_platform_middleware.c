@@ -9,7 +9,7 @@
  *       -I firmware/app/03_Platform/platform_common \
  *       -I firmware/app/04_Impl \
  *       -I firmware/app/03_Platform/platform_middleware \
- *       tests/test_platform_middleware.c \
+ *       tests/unit/platform/test_platform_middleware.c \
  *       firmware/app/03_Platform/platform_middleware/platform_ringbuf.c \
  *       firmware/app/03_Platform/platform_middleware/platform_crc.c \
  *       firmware/app/03_Platform/platform_middleware/platform_filter.c \
@@ -39,7 +39,8 @@ static void test_crc_selfcheck(void)
 
 static void test_crc_protocol_frame(void)
 {
-    /* LEN..PAYLOAD of the SET_VELOCITY example in docs/protocol.md. */
+    /* LEN..PAYLOAD of the SET_VELOCITY example in
+     * docs/architecture/protocol.md. */
     const uint8_t body[] = { 0x06, 0x01, 0x01, 0x2C, 0x01, 0xF4, 0x01 };
 
     CHECK(platform_crc16_ccitt(body, (uint32_t)sizeof(body)) == 0x3F72u,

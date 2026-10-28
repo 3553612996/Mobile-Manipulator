@@ -15,6 +15,8 @@
 
 **L1 能覆盖的部分必须 100% 覆盖**。协议解析出错是最常见的联调事故，而它在 PC 上十分钟就能测完。
 
+测试代码索引在 [`tests/README.md`](../../tests/README.md)；每个节点的测试报告与分层检查归档在 [`docs/nodes/<节点>/`](../nodes/)。
+
 ---
 
 ## 2. L1：单元测试
@@ -25,11 +27,11 @@
 
 | 测试 | 覆盖对象 | 依赖 |
 | --- | --- | --- |
-| `tests/test_protocol_codec.c` | `05_Middlewares/protocol`：协议表、组帧、解帧、CRC | 无（只需 gcc） |
-| `tests/test_service_proto.c` | `02_Service/service_proto`：分发、ACK、SEQ 去重、上报组帧 | UART 用内存管道替身 |
-| `tests/test_service_chassis.c` | `02_Service/service_chassis`：麦轮解算、超时、急停、里程计 | 电机用桩函数替身 |
-| `tests/test_service_key.c` | `02_Service/service_key`：短按/长按策略 | 按键用脚本状态替身 |
-| `tests/test_platform_middleware.c` | 环形缓冲、CRC、滤波 | 无 |
+| `tests/unit/protocol/test_protocol_codec.c` | `05_Middlewares/protocol`：协议表、组帧、解帧、CRC | 无（只需 gcc） |
+| `tests/unit/service/test_service_proto.c` | `02_Service/service_proto`：分发、ACK、SEQ 去重、上报组帧 | UART 用内存管道替身 |
+| `tests/unit/service/test_service_chassis.c` | `02_Service/service_chassis`：麦轮解算、超时、急停、里程计 | 电机用桩函数替身 |
+| `tests/unit/service/test_service_key.c` | `02_Service/service_key`：短按/长按策略 | 按键用脚本状态替身 |
+| `tests/unit/platform/test_platform_middleware.c` | 环形缓冲、CRC、滤波 | 无 |
 
 **测不了的**：`impl_mcu_*.c`、`impl_bsp_*.c`、`bsp_*.c`——它们直接操作寄存器和 HAL。
 
@@ -38,7 +40,7 @@
 ### 2.2 怎么写
 
 ```c
-/* tests/test_protocol.c */
+/* tests/unit/protocol/test_protocol_codec.c */
 #include <stdio.h>
 #include <string.h>
 #include "protocol.h"
@@ -109,16 +111,16 @@ gcc -std=c99 -Wall -Wextra \
     -I firmware/app/04_Impl \
     -I firmware/app/03_Platform/platform_middleware \
     -I firmware/app/05_Middlewares/protocol \
-    tests/test_protocol_codec.c \
+    tests/unit/protocol/test_protocol_codec.c \
     firmware/app/05_Middlewares/protocol/protocol_codec.c \
     firmware/app/05_Middlewares/protocol/protocol_def.c \
     firmware/app/03_Platform/platform_middleware/platform_crc.c \
     -o build/test_protocol_codec
 
 # 服务层（命令见文件头）
-#   tests/test_service_proto.c
-#   tests/test_service_chassis.c   （需要 -lm）
-#   tests/test_service_key.c
+#   tests/unit/service/test_service_proto.c
+#   tests/unit/service/test_service_chassis.c   （需要 -lm）
+#   tests/unit/service/test_service_key.c
 ```
 
 **通过标准**：退出码 0，输出 `PASS: ...`。任何一个 FAIL 都要在联调前修掉。
@@ -172,14 +174,14 @@ ros2 bag play ~/bags/2026-10-27-nomap --rate 0.5
 
 ### 4.3 协议闭环
 
-[`tools/proto_loop.py`](../tools/proto_loop.py) 按协议 v1 逐条验证"下发 → ACK → 上报"三段是否一致：
+[`tools/bench/proto_loop.py`](../../tools/bench/proto_loop.py) 按协议 v1 逐条验证"下发 → ACK → 上报"三段是否一致：
 
 ```bash
-python tools/proto_loop.py --list                        # 找串口
-python tools/proto_loop.py --port COM3 --monitor         # 只看上行帧和频率
-python tools/proto_loop.py --port COM3 --auto            # 静态项：使能/急停/清故障/拒绝非法帧
-python tools/proto_loop.py --port COM3 --auto --move     # 加上速度、断流停车（底盘必须架空）
-python tools/proto_loop.py --sim --auto --move           # 用内置模拟器自检脚本本身
+python tools/bench/proto_loop.py --list                        # 找串口
+python tools/bench/proto_loop.py --port COM3 --monitor         # 只看上行帧和频率
+python tools/bench/proto_loop.py --port COM3 --auto            # 静态项：使能/急停/清故障/拒绝非法帧
+python tools/bench/proto_loop.py --port COM3 --auto --move     # 加上速度、断流停车（底盘必须架空）
+python tools/bench/proto_loop.py --sim --auto --move           # 用内置模拟器自检脚本本身
 ```
 
 每一项都先看 ACK，再看紧随其后的 `STATUS`/`ODOM`/`EVENT`：只回了 ACK 不算通过，状态没变说明处理函数和应答对不上。通过标准是**全部 PASS、0 帧 CRC 错误**。
@@ -247,6 +249,8 @@ python tools/proto_loop.py --sim --auto --move           # 用内置模拟器自
 ```
 
 **"偶发"不是描述**。"约 1/5 次，发生在电机启动区域"才是。
+
+节点发布时，本节点的缺陷连同复现步骤、根因、修复和验证记录写进该节点的 `test-report.md`（见 [`docs/nodes/`](../nodes/)），不要只留在提交信息里。
 
 ---
 

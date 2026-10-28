@@ -114,9 +114,10 @@ gcc -std=c99 -Wall -Wextra -Werror \
     firmware/app/03_Platform/platform_middleware/platform_ringbuf.c \
     firmware/app/03_Platform/platform_middleware/platform_crc.c \
     firmware/app/03_Platform/platform_middleware/platform_filter.c \
-    tests/test_platform_middleware.c -o tests/test_platform_middleware
+    tests/unit/platform/test_platform_middleware.c \
+    -o build/test_platform_middleware
 
-./tests/test_platform_middleware
+./build/test_platform_middleware
 ```
 
 `04_Impl` 只用于提供 `impl_board/board_types.h`；中间件本身不包含任何 Impl 实现。

@@ -285,4 +285,4 @@ gcc -std=c99 -Wall -Wextra -Wshadow -Wconversion -Werror
 - [ ] 没有硬编码的密码、IP、路径
 - [ ] 新增的魔数已经定义成宏
 - [ ] 单位已经写进变量名
-- [ ] 改了协议的话，`docs/protocol.md` 同步更新
+- [ ] 改了协议的话，`docs/architecture/protocol.md` 同步更新

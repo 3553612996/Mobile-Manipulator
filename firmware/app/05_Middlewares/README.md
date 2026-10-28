@@ -16,7 +16,7 @@
 协议表是**双方共享的契约**：MCU、上位机、PC 单测、文档都引同一组数字。放在中间件里：
 
 - 只有一处定义命令字和负载长度，`service_proto` 与 app 都不许硬编码字节；
-- 可以在没有硬件、没有 RTOS 的情况下跑单元测试（`tests/test_protocol_codec.c`）；
+- 可以在没有硬件、没有 RTOS 的情况下跑单元测试（`tests/unit/protocol/test_protocol_codec.c`）；
 - 升级协议时改动集中在一个目录，review 时看得见。
 
 ## 协议表
@@ -64,7 +64,7 @@ gcc -std=c99 -Wall -Wextra \
     -I firmware/app/04_Impl \
     -I firmware/app/03_Platform/platform_middleware \
     -I firmware/app/05_Middlewares/protocol \
-    tests/test_protocol_codec.c \
+    tests/unit/protocol/test_protocol_codec.c \
     firmware/app/05_Middlewares/protocol/protocol_codec.c \
     firmware/app/05_Middlewares/protocol/protocol_def.c \
     firmware/app/03_Platform/platform_middleware/platform_crc.c \

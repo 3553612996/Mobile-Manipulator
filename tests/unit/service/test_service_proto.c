@@ -12,7 +12,7 @@
  *       -I firmware/app/03_Platform/platform_mcu \
  *       -I firmware/app/05_Middlewares/protocol \
  *       -I firmware/app/02_Service/service_proto \
- *       tests/test_service_proto.c \
+ *       tests/unit/service/test_service_proto.c \
  *       firmware/app/02_Service/service_proto/service_proto.c \
  *       firmware/app/05_Middlewares/protocol/protocol_codec.c \
  *       firmware/app/05_Middlewares/protocol/protocol_def.c \

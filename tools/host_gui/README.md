@@ -1,6 +1,6 @@
 # 上位机控制台 host_gui
 
-移动抓取机器人的 PC 串口控制台，按 [`docs/protocol.md`](../../docs/protocol.md) 协议 v1 实现。
+移动抓取机器人的 PC 串口控制台，按 [`docs/architecture/protocol.md`](../../docs/architecture/protocol.md) 协议 v1 实现。
 PySide6 绘制界面，pyserial 在独立线程里收发，解码后的帧通过 Qt 信号交给界面线程。
 
 ## 安装与运行
@@ -60,7 +60,7 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 模拟器发出的帧也会先用本地 `FrameParser` 解析一遍再交给界面，顺便做了编解码自检。
 
 固件已经实现同一套协议（`02_Service/service_proto` + `05_Middlewares/protocol`），
-真机联调优先用 [`tools/proto_loop.py`](../proto_loop.py)：它不看界面，直接给出 PASS/FAIL。
+真机联调优先用 [`tools/bench/proto_loop.py`](../bench/proto_loop.py)：它不看界面，直接给出 PASS/FAIL。
 
 ## 测试
 

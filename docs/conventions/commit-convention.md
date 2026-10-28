@@ -171,7 +171,7 @@ TODO: 奇异点检查、关节限位剪枝
 发布流程：
 
 1. `develop` 上目标功能完成，Keil 全量编译 0 error 0 warning
-2. 台架测试通过（`docs/testing.md` L3）
+2. 台架测试通过（`docs/conventions/testing.md` L3）
 3. 把 `VERSION` 改成新版本
 4. `git switch main && git merge --no-ff develop && git tag -a vX.Y.Z -m "…"`
 5. 推 `main`、`develop` 和 tag
