@@ -1,6 +1,6 @@
 # 四轮电机死区与速度环整定记录
 
-> **状态：架空台架已完成一轮整定（2026-10-29）。** 死区与增益都来自真机测量，条件见表；**落地（带负载）后需要复测**。选定增益目前只在本文和一次运行期下发里，编译期默认值仍是保守初值，等外部 Flash 参数存储实现后一起固化（第 6 节）。
+> **状态：架空台架已完成一轮整定（2026-10-29）。** 死区与增益都来自真机测量，条件见表；**落地（带负载）后需要复测**。选定值已回填为 `app_robot_config.h` 的编译期默认值，并通过 `PARAM_SAVE scope=0/1` 写进外部 Flash 的参数/标定区（第 6 节），上电时从 Flash 加载，Flash 空白或校验失败才退回编译期值。
 
 ---
 
@@ -207,18 +207,18 @@ duty_cmd = pid_out + sign(target) * deadzone_permille
 
 ### 6.1 选定值
 
-| 参数 | 当前 `app_robot_config.h` | 选定值 |
+| 参数 | 编译期默认（`app_robot_config.h`） | 整定值 |
 | --- | --- | --- |
-| `APP_CHASSIS_LEFT_PID_KP` | 1.0 | **5.0** |
-| `APP_CHASSIS_LEFT_PID_KI` | 0.6 | **6.0** |
+| `APP_CHASSIS_LEFT_PID_KP` | 5.0 | **5.0** |
+| `APP_CHASSIS_LEFT_PID_KI` | 6.0 | **6.0** |
 | `APP_CHASSIS_LEFT_PID_KD` | 0.0 | 0.0 |
-| `APP_CHASSIS_RIGHT_PID_KP` | 1.0 | **5.0** |
-| `APP_CHASSIS_RIGHT_PID_KI` | 0.6 | **6.0** |
+| `APP_CHASSIS_RIGHT_PID_KP` | 5.0 | **5.0** |
+| `APP_CHASSIS_RIGHT_PID_KI` | 6.0 | **6.0** |
 | `APP_CHASSIS_RIGHT_PID_KD` | 0.0 | 0.0 |
 
-四轮相同；`service_chassis_cfg_t` 的按轮数组（`pid_kp[4]` 等）保持"左两组、右两组"的填充方式即可。
+四轮相同；`service_chassis_cfg_t` 的按轮数组（`pid_kp[4]` 等）保持"左两组、右两组"的填充方式即可。起转占空比的编译期默认值同为实测值（`APP_CHASSIS_DEADZONE_FWD/REV_PERMILLE`，A 75/67、B 67/75、C 82/80、D 80/100）。
 
-**本文与运行期 `SET_PARAM` 是目前唯一记录这些值的地方**：增益只写 RAM，断电或复位就回到 1.0 / 0.6。复现方式：
+**`SET_PARAM` 只写 RAM，掉电或复位就回到"上次保存的值，没有保存则回到编译期值"**；要让整定结果活过断电，必须再发一次 `PARAM_SAVE scope=0`（见 6.2）。标定类参数（轮径、四轮比例/方向/起转占空比）同样通过 `PARAM_SAVE scope=1` 固化。复现方式：
 
 ```bash
 python tools/bench/wheel_tune.py --port COM7 step --speed 200 --kp 5.0 --ki 6.0 --yes
@@ -226,13 +226,13 @@ python tools/bench/wheel_tune.py --port COM7 step --speed 200 --kp 5.0 --ki 6.0 
 
 （`step` 会先下发增益再测量，等于一次"应用 + 复测"。）
 
-### 6.2 写外部 Flash（协议已定，驱动待实现）
+### 6.2 写外部 Flash（已实现）
 
-存储分区、记录格式与保存命令见 [flash-layout.md](../architecture/flash-layout.md) 和 [protocol.md](../architecture/protocol.md) 5.5 节。固件实现后：
+存储分区、记录格式与保存命令见 [flash-layout.md](../architecture/flash-layout.md) 和 [protocol.md](../architecture/protocol.md) 5.5 节。当前固件的行为：
 
-1. `SET_PARAM` 写增益成功后在 RAM 生效，并置"参数脏"标志；
-2. 主机发 `PARAM_SAVE` 后由 `appStorage` 任务写入参数区（擦写只有一个写者，不占控制任务）；
-3. 上电时从 Flash 读参数，校验 CRC 失败或空白则退回 `app_robot_config.h` 的编译期值；
+1. `SET_PARAM` 写增益成功后在 RAM 生效（控制任务下一个 10 ms 节拍推入速度环），并置"参数脏"标志；
+2. 主机发 `PARAM_SAVE scope=0` 后由 `appStorage` 任务写入参数区 60 B blob（擦写只有一个写者，不占控制任务）；
+3. 上电时从 Flash 读参数，校验版本/长度/范围失败或空白则退回 `app_robot_config.h` 的编译期值；
 4. 写成功后 `REPORT_STORAGE`（`0xC8`）的 bit0"无脏数据"置位，主机才知道可以断电。
 
 固化时把 6.1 的四个值写进参数区，并把 `app_robot_config.h` 的编译期初值同步改成同一组数——编译期初值是 Flash 空白/损坏时的兜底，两者不一致会让"掉参数"故障表现得像正常工作。

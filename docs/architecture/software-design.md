@@ -107,7 +107,9 @@ ros2_ws/src/
 | `app_robot.c` | `app_robot_init()` / `app_robot_start()` 转发给 `app_user_init` |
 | `app_user_init.c` | 常量任务表 + 常量队列表，初始化时循环创建；注册 UART 事件 |
 | `app_tasks.c` | `appComm` / `appCtrl` 两个任务的主循环 |
-| `app_handlers.c` | 协议命令处理表、按键手势、PID 参数入队 |
+| `app_storage.c` | `appStorage` 任务：Flash 单写者、请求/导出队列、导出节拍 |
+| `app_params.c` | 参数与标定的 RAM 副本、默认值、字节布局、脏标记 |
+| `app_handlers.c` | 协议命令处理表、按键手势、PID 参数入队、0x08~0x0D 的检查 |
 | `app_state.c` | 主状态机（INIT / IDLE / MANUAL / AUTO / ESTOP / FAULT） |
 | `app_fault.c` | 故障仲裁与降级策略 |
 | `app_report.c` | 上报节奏（ODOM / WHEEL_SPEED / ARM / STATUS / HEARTBEAT） |
@@ -212,16 +214,19 @@ AUTO 在协议中预留，当前没有内部自主运动任务，固件不会主
 
 ### 6.1 STM32 侧
 
-FreeRTOS 上跑两个任务，定义在 `app_user_init.c` 的常量表里：
+FreeRTOS 上跑三个任务，定义在 `app_user_init.c` 的常量表里：
 
 | 任务 | 优先级 | 周期 | 栈 | 职责 |
 | --- | --- | --- | --- | --- |
-| `appComm` | HIGH | 10 ms（UART 事件唤醒） | 见 `APP_COMM_TASK_STACK_BYTES` | 协议处理与 ACK、故障轮询、全部上报帧 |
+| `appComm` | HIGH | 10 ms（UART 事件唤醒） | 见 `APP_COMM_TASK_STACK_BYTES` | 协议处理与 ACK、故障轮询、全部上报帧、导出队列出栈 |
 | `appCtrl` | ABOVE_NORMAL | 10 ms | 见 `APP_CONTROL_TASK_STACK_BYTES` | 按键、PID 参数出队、四轮速度环、里程计、蜂鸣器 |
+| `appStorage` | LOW | 10 ms | 见 `APP_STORAGE_TASK_STACK_BYTES` | Flash 单写者：保存、日志/故障入环、清除、导出产生 |
 
-**为什么是两个而不是五个**：上报本身不耗时（四帧合计不到 40 字节 / 周期），独立成任务只会增加同步点。通信超时在 `appComm` 里以 10 ms 粒度轮询，控制环仍由 `appCtrl` 独占——这样 PID 的浮点状态只有控制任务写，不存在并发修改。机械臂插补当前由 `service_arm` 在 `appCtrl` 中推进，等真实舵机总线需要更长耗时时再拆任务。
+**为什么是三个而不是五个**：上报本身不耗时（四帧合计不到 40 字节 / 周期），独立成任务只会增加同步点。通信超时在 `appComm` 里以 10 ms 粒度轮询，控制环仍由 `appCtrl` 独占——这样 PID 的浮点状态只有控制任务写，不存在并发修改。机械臂插补当前由 `service_arm` 在 `appCtrl` 中推进，等真实舵机总线需要更长耗时时再拆任务。
 
-**只有一个发送者**：串口 TX 只在 `appComm` 里调用。控制任务要上报（按键长按急停）时置 `s_pending_estop` 标志，由通信任务变成事件帧，避免两个任务同时进入阻塞发送。PID 调参走 `appPid` 队列从通信任务传给控制任务，队列按值拷贝，参数在控制任务里才写入 PID。
+第三个任务是存储：一次扇区擦除会把 SPI 总线占住 150 ms~1 s，任何直接调用 `service_storage_*` 的任务都会被卡住——`appComm` 会触发 200 ms 指令超时，`appCtrl` 会让电机保持上一次占空比。所以 Flash 只有一个所有者 `appStorage`，其他任务只往 `appStore` 队列里放 24 B 的描述符。它排在最低优先级：存储永远不紧急，慢一点只影响日志，不影响运动。
+
+**只有一个发送者**：串口 TX 只在 `appComm` 里调用。控制任务要上报（按键长按急停）时置 `s_pending_estop` 标志，由通信任务变成事件帧；`appStorage` 不碰 UART，它把 `REPORT_LOG` / `REPORT_CRASH` / `REPORT_STORAGE` 放进 `appExport` 队列，由 `appComm` 在 `service_proto_process()` 之后调用 `app_storage_pump()` 统一发出。PID 调参走 `appPid` 队列从通信任务传给控制任务，队列按值拷贝，参数在控制任务里才写入 PID。
 
 速度环取 10 ms 而不是 1 ms：当前 13 线编码器经 4 倍频、1:90 减速后约 24828 counts/mm，1 ms 内一个计数相当于约 40 mm/s，PID 反馈会被量化噪声主导。10 ms 下仍有 100 Hz 的控制频率，且四个浮点环与里程计都在控制任务预算内。若后续换更高线数编码器或加装速度滤波，再评估提高控制频率。
 
