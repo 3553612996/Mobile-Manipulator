@@ -20,7 +20,7 @@
 ├── docs/           项目文档：architecture/ 架构与协议、conventions/ 规范、nodes/ 节点产出
 ├── hardware/       接线图、物料清单
 ├── firmware/       STM32 固件：CubeMX 工程 + 分层的 app 代码
-├── ros2_ws/src/    ROS 2 功能包
+├── mobile_manipulator_ws/src/  ROS 2 功能包
 ├── models/         模型说明（权重不入库，见 models/README.md）
 ├── tools/          PC 侧工具：bench/ 台架测试、host_gui/ 上位机、docgen/ 文档生成
 ├── config/         udev 规则等系统配置
@@ -64,12 +64,12 @@ ROS 2 工作空间（RK3566 / Ubuntu + ROS 2 Humble）：
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd ros2_ws
+cd mobile_manipulator_ws
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-当前 M1 只有包骨架，节点与 launch 在 M3～M9 补充，详见 [ROS 2 工作空间](ros2_ws/README.md)。固件构建见 `firmware/` 与 `scripts/`。
+当前 M1 只有包骨架，节点与 launch 在 M3～M9 补充，详见 [mobile_manipulator_ws](mobile_manipulator_ws/README.md)。固件构建见 `firmware/` 与 `scripts/`。
 
 ## 说明
 

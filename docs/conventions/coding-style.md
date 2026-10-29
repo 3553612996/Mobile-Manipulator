@@ -266,8 +266,8 @@ x += v * dt * cosf(theta + dtheta / 2.0f);
 clang-format -i --style=file firmware/**/*.c firmware/**/*.h
 
 # Python
-black ros2_ws/src tools
-flake8 ros2_ws/src tools --max-line-length=100
+black mobile_manipulator_ws/src tools
+flake8 mobile_manipulator_ws/src tools --max-line-length=100
 
 # 编译告警全开（这是最有效的静态检查）
 gcc -std=c99 -Wall -Wextra -Wshadow -Wconversion -Werror

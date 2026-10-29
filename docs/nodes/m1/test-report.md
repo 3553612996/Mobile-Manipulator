@@ -32,7 +32,7 @@ M1 的交付物是 **ROS 2 工作空间骨架**，不是功能节点：
 ## 2. 交付物
 
 ```text
-ros2_ws/
+mobile_manipulator_ws/
 ├── README.md
 └── src/
     ├── robot_interfaces/
@@ -98,7 +98,7 @@ ros2_ws/
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd ~/Mobile-Manipulator/ros2_ws
+cd ~/Mobile-Manipulator/mobile_manipulator_ws
 colcon build --symlink-install
 source install/setup.bash
 
