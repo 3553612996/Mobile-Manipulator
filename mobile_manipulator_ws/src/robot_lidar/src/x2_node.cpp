@@ -239,6 +239,14 @@ private:
         continue;
       }
 
+      if (points_in_scan_ == 0U) {
+        // First accepted point of this revolution. The published scan is
+        // stamped at the midpoint between here and the last point, so keep
+        // the arrival time (see publish_scan()).
+        scan_start_stamp_ = now();
+        has_scan_start_ = true;
+      }
+
       const double raw_rad = point.angle_deg * x2::kPi / 180.0;
       const double theta = x2::normalize_rad_pi(
         (invert_angle_ ? -raw_rad : raw_rad) + offset_rad);
@@ -271,19 +279,34 @@ private:
       return;
     }
 
-    const auto stamp = now();
+    // One revolution takes about 166 ms at 6 Hz. Stamping it when the last
+    // point arrives would make the first point up to 166 ms stale; the
+    // midpoint halves the worst-case error and pairs with time_increment.
+    const rclcpp::Time end = now();
+    rclcpp::Time stamp = end;
+    if (has_scan_start_) {
+      const int64_t start_ns = scan_start_stamp_.nanoseconds();
+      stamp = rclcpp::Time(
+        start_ns + (end.nanoseconds() - start_ns) / 2, end.get_clock_type());
+    }
 
     if (publish_scan_) {
       sensor_msgs::msg::LaserScan message;
       message.header.stamp = stamp;
       message.header.frame_id = frame_id_;
       message.angle_min = -x2::kPi;
-      message.angle_max = x2::kPi;
-      message.angle_increment = angle_increment_;
-      message.time_increment = 0.0F;
+      // REP-117: angle_max = angle_min + (N - 1) * increment. Using +pi here
+      // instead would make (max - min) / increment report 720 bins for a
+      // 720-entry ranges array, which some consumers flag as inconsistent.
+      message.angle_max = static_cast<float>(-x2::kPi) +
+        static_cast<float>(scan_bins_ - 1) * static_cast<float>(angle_increment_);
+      message.angle_increment = static_cast<float>(angle_increment_);
       const double frequency =
         measured_frequency_hz_ > 0.0 ? measured_frequency_hz_ : scan_frequency_hz_;
       message.scan_time = static_cast<float>(1.0 / frequency);
+      // Points within one revolution are not simultaneous; declaring the
+      // spacing lets SLAM and the costmap compensate for motion during a scan.
+      message.time_increment = message.scan_time / static_cast<float>(scan_bins_);
       message.range_min = static_cast<float>(range_min_m_);
       message.range_max = static_cast<float>(range_max_m_);
       message.ranges = ranges_;
@@ -325,6 +348,7 @@ private:
       ranges_.begin(), ranges_.end(), std::numeric_limits<float>::infinity());
     scan_points_.clear();
     points_in_scan_ = 0U;
+    has_scan_start_ = false;
   }
 
   // parameters
@@ -349,6 +373,8 @@ private:
   std::vector<float> ranges_;
   std::vector<CloudPoint> scan_points_;
   std::size_t points_in_scan_{0U};
+  rclcpp::Time scan_start_stamp_{0, 0, RCL_ROS_TIME};
+  bool has_scan_start_{false};
   bool has_last_packet_{false};
   bool has_start_packets_{false};
   double last_start_angle_deg_{0.0};

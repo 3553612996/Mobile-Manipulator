@@ -9,6 +9,17 @@ YDLIDAR X2 2D 激光雷达驱动（M4）。读取 X2 串口数据，按一圈累
 
 节点不发布 TF。`frame_id` 默认 `laser_link`，URDF 再加入 `base_link → laser_link` 的静态变换。
 
+## LaserScan 元数据
+
+| 字段 | 取值 | 理由 |
+| --- | --- | --- |
+| `angle_min` / `angle_max` | `-π` / `-π + (N-1)·increment` | REP-117 约定。写成 `+π` 会让 `(max-min)/increment` 得到 N 而不是 N-1，部分消费者按此推算 bin 数会和 `ranges.size()` 对不上 |
+| `time_increment` | `scan_time / scan_bins`（6 Hz、720 bin → 0.23 ms） | 一圈 166 ms，点不同时；SLAM 与 costmap 靠它补偿扫描期间的运动 |
+| `header.stamp` | 本圈**中点**（首点到末点的中间） | 打在本圈结束时，第一个点会比时间戳旧 166 ms；取中点把最大误差减半 |
+| 缺失 bin | `inf` | 与 `range_min`/`range_max` 的语义一致，不填 0 |
+
+时间戳与 `time_increment` 都按"点按角度顺序排列"的常规假设给出；X2 每圈起始点不在 `angle_min` 处，因此存在半圈以内的系统误差，与商家 SDK 的做法一致。
+
 ## 协议要点
 
 已对照 `docs/datasheet/LiDAR/` 与商家 YDLIDAR SDK（`ydlidar_ros2/sdk/src/ydlidar_driver.cpp`）。
