@@ -11,6 +11,8 @@
  *       -I firmware/app/03_Platform/platform_mcu \
  *       -I firmware/app/04_Impl \
  *       -I firmware/app/03_Platform/platform_bsp \
+ *       -I firmware/app/03_Platform/platform_os \
+ *       -I firmware/app/03_Platform/platform_middleware \
  *       -I firmware/app/05_Middlewares/protocol \
  *       -I firmware/app/02_Service \
  *       -I firmware/app/01_APP \
@@ -25,6 +27,8 @@
 
 #include "app_robot/app_fault.h"
 #include "app_robot/app_state.h"
+
+#include "app_robot/app_storage.h"
 
 #include "service_chassis/service_chassis.h"
 #include "service_arm/service_arm.h"
@@ -49,6 +53,8 @@ static platform_bool_t g_chassis_enable_last;
 static int             g_arm_disable_calls;
 static int             g_event_count;
 static uint16_t        g_last_event;
+static int             g_storage_faults;
+static uint16_t        g_last_stored_fault;
 static platform_bool_t g_estop;
 static platform_bool_t g_timed_out;
 static platform_bool_t g_crc_alarm;
@@ -113,6 +119,13 @@ platform_bool_t app_battery_low(void)
     return g_battery_low;
 }
 
+platform_bool_t app_storage_append_fault(uint16_t code)
+{
+    g_storage_faults++;
+    g_last_stored_fault = code;
+    return PLATFORM_TRUE;
+}
+
 /* ------------------------------ fixtures ------------------------------ */
 
 static void reset_all(void)
@@ -124,6 +137,8 @@ static void reset_all(void)
     g_arm_disable_calls = 0;
     g_event_count = 0;
     g_last_event = 0u;
+    g_storage_faults = 0;
+    g_last_stored_fault = 0u;
     g_estop = PLATFORM_FALSE;
     g_timed_out = PLATFORM_FALSE;
     g_crc_alarm = PLATFORM_FALSE;
@@ -165,6 +180,9 @@ static void test_warn_only_reports(void)
     CHECK(g_arm_disable_calls == 0, "warning does not disable the arm");
     CHECK(g_event_count == 1 && g_last_event == PROTOCOL_FAULT_BATTERY_LOW,
           "warning sends one event");
+    CHECK(g_storage_faults == 1 &&
+          g_last_stored_fault == PROTOCOL_FAULT_BATTERY_LOW,
+          "warning is queued for the fault ring");
 
     /* Equal severity keeps the first latch. */
     CHECK(app_fault_raise(PROTOCOL_FAULT_CRC_LIMIT, 110u,
@@ -172,6 +190,7 @@ static void test_warn_only_reports(void)
           "equal severity is ignored");
     CHECK(app_fault_code() == PROTOCOL_FAULT_BATTERY_LOW,
           "first warning stays latched");
+    CHECK(g_storage_faults == 1, "a suppressed fault is not written twice");
 }
 
 static void test_error_stops_one_subsystem(void)

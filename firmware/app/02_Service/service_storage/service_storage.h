@@ -199,7 +199,18 @@ platform_err_t service_storage_crash_read(uint8_t slot,
                                           uint16_t capacity,
                                           uint16_t *out_length);
 platform_err_t service_storage_crash_mark_read(uint8_t slot);
+
+/* LOG_CLEAR for the crash region: drop the VALID bit of every valid slot. */
+platform_err_t service_storage_crash_clear(void);
+
 platform_bool_t service_storage_crash_unread(void);
+
+/*
+ * Cache-only queries, no bus access: the protocol task answers CRASH_READ
+ * from them instead of paying for a flash read that can sit behind an erase.
+ */
+platform_bool_t service_storage_crash_slot_valid(uint8_t slot);
+platform_bool_t service_storage_crash_latest(uint8_t *out_slot);
 
 void service_storage_get_status(service_storage_status_t *status);
 

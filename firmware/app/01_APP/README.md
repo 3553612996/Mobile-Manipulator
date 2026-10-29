@@ -62,9 +62,9 @@ static const app_queue_def_t s_queue_table[] = {
 
 | 队列 | 元素 | 生产者 → 消费者 | 用途 |
 | --- | --- | --- | --- |
-| `appPid` | `{kind, wheel, gain, duty, value}` | `appComm` → `appCtrl` | PID 增益与台架测试占空比的写入串行化到控制任务 |
+| `appPid` | `{kind, wheel, gain, duty, value}` | `appComm` → `appCtrl` | PID 增益、台架测试占空比、参数/标定重载的写入串行化到控制任务 |
 
-回调里不直接改 PID：协议回调跑在通信任务，PID 状态归控制任务所有。入队失败返回 ACK `FAILED`，而不是假装成功。队列元素带 `kind` 字段区分两类消息，`duty` 只在测试占空比消息里有意义。
+回调里不直接改 PID：协议回调跑在通信任务，PID 状态归控制任务所有。入队失败返回 ACK `FAILED`，而不是假装成功。队列元素带 `kind` 字段区分四类消息：增益、测试占空比、`PID_RELOAD`（`app_params_apply_to_chassis()`，重载增益/几何/四轮比例/方向/起转占空比/限速）和 `LIMITS_RELOAD`（`app_params_apply_limits_to_chassis()`，只重载超时与限速，不重置积分）。`duty` 只在测试占空比消息里有意义。
 
 ## 命令处理
 
@@ -74,7 +74,7 @@ static const app_queue_def_t s_queue_table[] = {
 | `SET_ARM_JOINTS` | `service_arm_set_joints()`；ESTOP/FAULT 中拒绝 | OK / RANGE / STATE / FAILED |
 | `SET_GRIPPER` | 无夹爪硬件，如实返回失败 | FAILED |
 | `SET_ENABLE` | 状态允许且未急停时先使能机械臂再使能底盘；底盘失败则回退机械臂 | OK / STATE |
-| `SET_PARAM` | 校验 ID 与范围，PID 增益入队；测试占空比另走一条入队路径 | OK / RANGE / STATE / FAILED |
+| `SET_PARAM` | 校验 ID 与范围：PID 增益、测试占空比、标定/限速分别入队；标定类 ID 要求底盘失能 | OK / RANGE / STATE / FAILED / BUSY |
 | `ESTOP` | `service_chassis_emergency_stop()` + `service_arm_enable(FALSE)` + 强制锁存 `0x0501` | OK |
 | `CLEAR_FAULT` | 交给 `app_fault_clear()`：解除锁存、清故障码；**不自动使能** | OK / STATE |
 
@@ -99,6 +99,23 @@ static const app_queue_def_t s_queue_table[] = {
 用途是量电机死区：速度环会把死区补偿掉，量到的就不是电机本身的特性。处理函数在这里多一道检查——底盘没使能或已急停直接回 `STATE`，因为真正的写入发生在控制任务，等到那时再拒绝主机已经收到 OK 了。
 
 每个轮子单独计时，300 ms 不刷新就按 0 处理；任何速度指令、停车、失能、急停都会退出测试模式。参数上限和语义见 `docs/architecture/protocol.md` §5.4，实测流程见 `docs/bench/pid-tuning.md`。
+
+### 标定与限速参数
+
+| id | 含义 | 生效方式 |
+| --- | --- | --- |
+| `0x01` | 轮距，mm | 写入后控制任务重载 `service_chassis_set_geometry()` |
+| `0x02` | 轮径，mm | 由 `4680/(π·d)` 重算四轮 `counts_per_mm` 后重载 |
+| `0x50~0x53` | 四轮编码器比例 ×1000 | `service_chassis_set_wheel_scale()`，会重设该轮 PID 与里程计基线 |
+| `0x54~0x57` / `0x58~0x5B` | 四轮正/反向可靠起转占空比 ‰ | `service_chassis_set_start_duty()`，只在轮子静止且目标非零时抬升输出 |
+| `0x5C~0x5F` | 四轮方向 `+1/-1` | 反转该轮的编码器符号（测速与里程计同时生效） |
+| `0x10~0x12` | 指令超时 / 最大线速度 / 最大角速度 | 单独的限速重载，不重置 PID，可在使能状态下写 |
+
+标定类 id（`0x01`、`0x02`、`0x50~0x5F`）在底盘使能或急停锁存时返回 `STATE`：行进中改尺子会让里程计跳变。值只写 RAM 并置脏，`PARAM_SAVE` 才落盘。写轮径会覆盖 `0x50~0x53` 的单轮微调，顺序应是**先轮径后微调**。
+
+上电顺序：`app_user_init_storage()` 读两个 blob → `app_params_init()` 的默认值被覆盖 → `service_chassis_init(cfg)` → `app_params_apply_to_chassis()` 推入四轮比例/方向/起转占空比与限速。此时还没有任务在跑，是控制任务之外唯一允许调用 `service_chassis` setter 的地方。
+
+> 注意 `0x41`（死区总开关）目前返回 `RANGE`：起转补偿已经按轮独立配置，用 `0x54~0x5B` 写 0 即关闭。
 
 ## 状态机
 
@@ -158,10 +175,10 @@ INIT ──ready──► IDLE ◄──SET_ENABLE(0)──► MANUAL
 
 ## 标定项
 
-`app_robot_config.h` 里带 `TODO(measure)` 的数字必须上车实测：
+`app_robot_config.h` 里带 `TODO(measure)` 的数字必须上车实测。它们只是**出厂默认值**：主机可以用 `SET_PARAM` + `PARAM_SAVE` 把实测结果写进标定区，上电时保存值优先。
 
 - `APP_CHASSIS_HALF_LENGTH_MM` / `APP_CHASSIS_HALF_WIDTH_MM`：影响旋转解算与里程计航向；
-- `APP_CHASSIS_COUNTS_PER_MM_X1000`：按 13 线 × 4 倍频 × 90 减速比 / (π × 60 mm) = 24828 计算，轮径变了要重算；
+- `APP_CHASSIS_COUNTS_PER_MM_X1000`：按 13 线 × 4 倍频 × 90 减速比 / (π × 60 mm) = 24828 计算，轮径变了要重算（运行时写 `0x02` 即可，固件用同一个 4680 counts/rev 常数）；
 - `APP_CHASSIS_MAX_WHEEL_MM_S`：轮速目标上限；`counts_per_mm_x1000 = 0` 时也是开环回退的满量程；
 - `APP_CHASSIS_LEFT/RIGHT_PID_*`：速度环启动增益，**不是标定结果**。轮胎未装、负载未知，先用 `tools/bench/wheel_tune.py` 在台架上整定，数据记到 `docs/bench/pid-tuning.md`，再把选定值回填这里。
 

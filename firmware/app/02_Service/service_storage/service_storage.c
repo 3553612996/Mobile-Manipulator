@@ -91,6 +91,7 @@ static uint32_t s_last_wear_log_erase;
 static uint32_t s_last_wear_fault_erase;
 
 static uint8_t  s_crash_state[SERVICE_STORAGE_CRASH_SLOTS];
+static uint32_t s_crash_seq[SERVICE_STORAGE_CRASH_SLOTS];
 static platform_bool_t s_crash_unread;
 
 static uint8_t  s_log_level = 1u;
@@ -779,6 +780,7 @@ static platform_err_t s_crash_validate(uint8_t slot,
             return PLATFORM_ERR_NO_RESOURCE;
         }
         s_crash_state[slot] = 1u;
+        s_crash_seq[slot] = s_get32(header + 8u);
     }
 
     if (out_length != NULL)
@@ -846,6 +848,7 @@ static void s_reset_state(void)
     for (i = 0u; i < SERVICE_STORAGE_CRASH_SLOTS; i++)
     {
         s_crash_state[i] = 0u;
+        s_crash_seq[i] = 0u;
     }
 
     for (i = 0u; i < SERVICE_STORAGE_BLOB_COUNT; i++)
@@ -1001,8 +1004,13 @@ platform_err_t service_storage_save_blob(service_storage_blob_t which,
     s_save_failed = PLATFORM_FALSE;
     s_last_save_s = s_time_s(now_ms);
 
-    /* Advisory only: the blob is already safe at this point. */
-    (void)s_wear_store(now_ms);
+    /*
+     * The wear record is a second sector erase (~50 ms). Do not do it here:
+     * the blob seq is already published, so a host that polls REPORT_STORAGE
+     * would see the new seq and send the next PARAM_SAVE while this call is
+     * still busy, getting BUSY for a save that is in fact finished. The app
+     * layer flushes the wear record after it has reported completion.
+     */
 
     return PLATFORM_ERR_OK;
 }
@@ -1390,6 +1398,86 @@ platform_err_t service_storage_crash_mark_read(uint8_t slot)
 platform_bool_t service_storage_crash_unread(void)
 {
     return s_crash_unread;
+}
+
+/*
+ * LOG_CLEAR for the crash region. Clearing the VALID bit is a 2-byte program
+ * per slot; erasing sixteen 4 KiB sectors would take up to six seconds and
+ * buys nothing, because a slot is erased again when it is reused.
+ */
+platform_err_t service_storage_crash_clear(void)
+{
+    /* Bytes, not a uint16_t: the encoding on flash is little-endian by rule. */
+    uint8_t cleared[2] = { 0u, 0u };
+    uint32_t slot;
+    platform_err_t err;
+
+    if (s_initialized == PLATFORM_FALSE)
+    {
+        return PLATFORM_ERR_NOT_INITIALIZED;
+    }
+
+    for (slot = 0u; slot < SERVICE_STORAGE_CRASH_SLOTS; slot++)
+    {
+        if (s_crash_state[slot] != 1u)
+        {
+            continue;
+        }
+
+        err = s_write_at(s_crash_slot_address(slot) + 6u, cleared, 2u);
+        if (PLATFORM_IS_ERR(err))
+        {
+            s_crash_scan();
+            return err;
+        }
+    }
+
+    s_crash_scan();
+
+    return PLATFORM_ERR_OK;
+}
+
+/*
+ * Both accessors answer from the cache filled by the mount scan, so a caller
+ * that must not touch the bus (the protocol task, which owes the host an ACK
+ * within 200 ms) can resolve CRASH_READ without waiting behind an erase.
+ */
+platform_bool_t service_storage_crash_slot_valid(uint8_t slot)
+{
+    if (slot >= SERVICE_STORAGE_CRASH_SLOTS)
+    {
+        return PLATFORM_FALSE;
+    }
+
+    return (s_crash_state[slot] == 1u) ? PLATFORM_TRUE : PLATFORM_FALSE;
+}
+
+platform_bool_t service_storage_crash_latest(uint8_t *out_slot)
+{
+    uint32_t slot;
+    uint32_t best = SERVICE_STORAGE_CRASH_SLOTS;
+    uint32_t best_seq = 0u;
+
+    for (slot = 0u; slot < SERVICE_STORAGE_CRASH_SLOTS; slot++)
+    {
+        if ((s_crash_state[slot] == 1u) && (s_crash_seq[slot] >= best_seq))
+        {
+            best_seq = s_crash_seq[slot];
+            best = slot;
+        }
+    }
+
+    if (best == SERVICE_STORAGE_CRASH_SLOTS)
+    {
+        return PLATFORM_FALSE;
+    }
+
+    if (out_slot != NULL)
+    {
+        *out_slot = (uint8_t)best;
+    }
+
+    return PLATFORM_TRUE;
 }
 
 //******************************** Status ***********************************//

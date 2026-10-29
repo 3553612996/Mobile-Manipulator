@@ -62,6 +62,12 @@
 #define SERVICE_CHASSIS_TEST_DUTY_MAX          ((int16_t)400)
 #define SERVICE_CHASSIS_TEST_DUTY_TIMEOUT_MS   ((uint32_t)300u)
 
+/* Reliable start duty upper bound, permille. 1000 would be full torque. */
+#define SERVICE_CHASSIS_START_DUTY_MAX         ((int16_t)1000)
+
+/* Sanity bound for half wheelbase / half track, millimetres. */
+#define SERVICE_CHASSIS_GEOMETRY_MAX_MM        ((int16_t)1000)
+
 //******************************** Declaring ********************************//
 
 typedef enum
@@ -132,6 +138,49 @@ platform_err_t service_chassis_set_pid_gain(uint8_t wheel,
 platform_err_t service_chassis_get_pid_gain(uint8_t wheel,
                                             service_chassis_pid_gain_t gain,
                                             float_t *value);
+
+/*
+ * Runtime calibration. These change what the next control tick uses, so the
+ * application must call them from the control task (the owner of apply()), the
+ * same rule as service_chassis_set_pid_gain(). Protocol.md requires the
+ * chassis to be disabled while a calibration value is written.
+ *
+ * Geometry: half the wheelbase and half the track, in millimetres. The sum
+ * feeds the mecanum inverse kinematics and the yaw term of the odometry.
+ */
+platform_err_t service_chassis_set_geometry(int16_t half_length_mm,
+                                            int16_t half_width_mm);
+
+/*
+ * Per-wheel encoder scale and direction. counts_per_mm_x1000 is the x1000
+ * integer the protocol uses; 0 restores the common cfg value. dir is +1 or
+ * -1: a motor mounted mirrored gets -1, and every count delta is negated
+ * before it reaches the speed loop and the odometry. Passing 0 for dir is a
+ * parameter error so a bad value is never stored silently.
+ */
+platform_err_t service_chassis_set_wheel_scale(uint8_t wheel,
+                                               int32_t counts_per_mm_x1000,
+                                               int8_t dir);
+
+/*
+ * Reliable start duty per wheel and direction, permille. While the wheel is
+ * still at rest and the target is non-zero, the speed loop output is lifted to
+ * this value in the commanded direction. 0 disables the compensation; the
+ * default is 0 so an uncalibrated board behaves exactly as before.
+ */
+platform_err_t service_chassis_set_start_duty(uint8_t wheel,
+                                              int16_t fwd_permille,
+                                              int16_t rev_permille);
+
+/*
+ * Command timeout and velocity limits. Unlike the gain/geometry setters these
+ * are plain configuration reads, but they are still applied from the control
+ * task so there is one writer for the whole chassis state.
+ */
+platform_err_t service_chassis_set_limits(uint16_t cmd_timeout_ms,
+                                          int16_t max_vx_mm_s,
+                                          int16_t max_vy_mm_s,
+                                          int16_t max_wz_mrad_s);
 
 /* Enabling is refused while the emergency stop is latched. */
 platform_err_t service_chassis_enable(platform_bool_t enable, uint32_t now_ms);

@@ -98,6 +98,19 @@ static struct
     platform_bool_t             pid_was_timed_out;
 
     /*
+     * Runtime calibration, written by the control task only. A zero scale
+     * means "use cfg.counts_per_mm_x1000"; direction is +1 or -1 and is
+     * applied to the count delta, not to the commanded speed.
+     */
+    int32_t                     wheel_counts_per_mm_x1000
+                                    [SERVICE_CHASSIS_WHEEL_COUNT];
+    int8_t                      wheel_dir[SERVICE_CHASSIS_WHEEL_COUNT];
+    int16_t                     start_duty_fwd_permille
+                                    [SERVICE_CHASSIS_WHEEL_COUNT];
+    int16_t                     start_duty_rev_permille
+                                    [SERVICE_CHASSIS_WHEEL_COUNT];
+
+    /*
      * Bench open-loop test. test_active is the switch; the per-wheel values
      * and timestamps are written by the comm task (through the control task's
      * queue) and consumed by apply(). apply() notices the switch transition
@@ -200,11 +213,51 @@ static void service_chassis_reset_pid_state(void)
     }
 }
 
+/* Effective encoder scale: the per-wheel value, else the common config one. */
+static int32_t service_chassis_wheel_counts(uint8_t wheel)
+{
+    int32_t counts = s_chassis.wheel_counts_per_mm_x1000[wheel];
+
+    return (counts > 0) ? counts : s_chassis.cfg.counts_per_mm_x1000;
+}
+
+/* Millimetres per encoder count, or 0 when this wheel has no scale. */
+static float_t service_chassis_wheel_counts_to_mm(uint8_t wheel)
+{
+    int32_t counts = service_chassis_wheel_counts(wheel);
+
+    return (counts > 0) ? (1000.0f / (float_t)counts) : 0.0f;
+}
+
+static int8_t service_chassis_wheel_dir(uint8_t wheel)
+{
+    return (s_chassis.wheel_dir[wheel] < 0) ? (int8_t)-1 : (int8_t)1;
+}
+
+/*
+ * Closed loop needs a usable scale on every wheel: the kinematics mix all
+ * four, so one missing scale would make three wheels right and one wrong.
+ */
+static void service_chassis_refresh_closed_loop(void)
+{
+    uint8_t i;
+
+    s_chassis.closed_loop = PLATFORM_TRUE;
+
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        if (service_chassis_wheel_counts(i) <= 0)
+        {
+            s_chassis.closed_loop = PLATFORM_FALSE;
+        }
+    }
+}
+
 /*
  * Sample one encoder and turn the count step into mm/s. Returns the float
  * speed the loop uses; the rounded value goes out in REPORT_WHEEL_SPEED.
- * counts_per_mm_x1000 is read from the config, so the caller must be in a
- * closed-loop build (open-loop builds have no scale).
+ * The per-wheel direction is applied here, so a mirrored motor reports a
+ * positive speed for a positive command.
  */
 static float_t service_chassis_speed_mm_s(uint8_t wheel, float_t dt_s,
                                           float_t counts_to_mm)
@@ -224,7 +277,8 @@ static float_t service_chassis_speed_mm_s(uint8_t wheel, float_t dt_s,
                              (uint32_t)s_chassis.pid_prev_counts[wheel]);
     s_chassis.pid_prev_counts[wheel] = now_counts;
 
-    measured_mm_s = ((float_t)delta_counts * counts_to_mm) / dt_s;
+    measured_mm_s = ((float_t)delta_counts * counts_to_mm *
+                     (float_t)service_chassis_wheel_dir(wheel)) / dt_s;
     s_chassis.measured_wheel_mm_s[wheel] =
         service_chassis_clamp_i16(service_chassis_round(measured_mm_s));
 
@@ -337,8 +391,6 @@ platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg)
     s_chassis.heading_rad = 0.0f;
     s_chassis.vl_mm_s = 0;
     s_chassis.vr_mm_s = 0;
-    s_chassis.closed_loop = (cfg->counts_per_mm_x1000 > 0)
-                                ? PLATFORM_TRUE : PLATFORM_FALSE;
     s_chassis.pid_was_enabled = PLATFORM_FALSE;
     s_chassis.pid_was_estopped = PLATFORM_FALSE;
     s_chassis.pid_was_timed_out = PLATFORM_FALSE;
@@ -350,7 +402,16 @@ platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg)
         s_chassis.applied_duty[i] = 0;
         s_chassis.test_duty[i] = 0;
         s_chassis.test_duty_ms[i] = 0u;
+
+        /* Until the application pushes a calibration, the common scale and
+         * the unmirrored direction are what the config asked for. */
+        s_chassis.wheel_counts_per_mm_x1000[i] = 0;
+        s_chassis.wheel_dir[i] = 1;
+        s_chassis.start_duty_fwd_permille[i] = 0;
+        s_chassis.start_duty_rev_permille[i] = 0;
     }
+
+    service_chassis_refresh_closed_loop();
 
     /*
      * The PID output is the signed duty itself, so its limits are the motor
@@ -491,6 +552,133 @@ platform_err_t service_chassis_get_pid_gain(uint8_t wheel,
     {
         return PLATFORM_ERR_PARAM;
     }
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t service_chassis_set_geometry(int16_t half_length_mm,
+                                            int16_t half_width_mm)
+{
+    if (s_chassis.initialized == PLATFORM_FALSE)
+    {
+        return PLATFORM_ERR_NOT_INITIALIZED;
+    }
+
+    if ((half_length_mm <= 0) || (half_width_mm <= 0) ||
+        (half_length_mm > SERVICE_CHASSIS_GEOMETRY_MAX_MM) ||
+        (half_width_mm > SERVICE_CHASSIS_GEOMETRY_MAX_MM))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    /*
+     * The next tick's kinematics and yaw term read these; both are 16-bit
+     * stores, so a tick that starts in between sees one consistent value or
+     * the other, never a torn one. The application keeps the chassis disabled
+     * for this reason in any case.
+     */
+    s_chassis.cfg.half_length_mm = half_length_mm;
+    s_chassis.cfg.half_width_mm = half_width_mm;
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t service_chassis_set_wheel_scale(uint8_t wheel,
+                                               int32_t counts_per_mm_x1000,
+                                               int8_t dir)
+{
+    platform_bool_t was_closed_loop;
+
+    if (s_chassis.initialized == PLATFORM_FALSE)
+    {
+        return PLATFORM_ERR_NOT_INITIALIZED;
+    }
+
+    if ((wheel >= SERVICE_CHASSIS_WHEEL_COUNT) ||
+        (counts_per_mm_x1000 < 0) ||
+        ((dir != (int8_t)1) && (dir != (int8_t)-1)))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    was_closed_loop = s_chassis.closed_loop;
+
+    s_chassis.wheel_counts_per_mm_x1000[wheel] = counts_per_mm_x1000;
+    s_chassis.wheel_dir[wheel] = dir;
+
+    service_chassis_refresh_closed_loop();
+
+    /*
+     * A direction flip would otherwise present the next count step as one
+     * huge negative speed. Re-baseline this wheel and, if the loop mode
+     * changed at all, start every loop from clean state.
+     */
+    if (was_closed_loop != s_chassis.closed_loop)
+    {
+        service_chassis_reset_pid_state();
+    }
+    else
+    {
+        s_chassis.measured_wheel_mm_s[wheel] = 0;
+        s_chassis.pid_prev_counts[wheel] = 0;
+        (void)platform_motor_get_encoder(s_chassis.cfg.motor[wheel],
+                                         &s_chassis.pid_prev_counts[wheel]);
+
+        /*
+         * Re-baseline the odometry too. A scale change is a change of ruler:
+         * counts accumulated under the old value must not be re-measured with
+         * the new one. The chassis is supposed to be disabled here, but the
+         * encoder is still sampling until the next tick.
+         */
+        s_chassis.prev_counts[wheel] = s_chassis.pid_prev_counts[wheel];
+    }
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t service_chassis_set_start_duty(uint8_t wheel,
+                                              int16_t fwd_permille,
+                                              int16_t rev_permille)
+{
+    if (s_chassis.initialized == PLATFORM_FALSE)
+    {
+        return PLATFORM_ERR_NOT_INITIALIZED;
+    }
+
+    if ((wheel >= SERVICE_CHASSIS_WHEEL_COUNT) ||
+        (fwd_permille < 0) || (rev_permille < 0) ||
+        (fwd_permille > SERVICE_CHASSIS_START_DUTY_MAX) ||
+        (rev_permille > SERVICE_CHASSIS_START_DUTY_MAX))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    s_chassis.start_duty_fwd_permille[wheel] = fwd_permille;
+    s_chassis.start_duty_rev_permille[wheel] = rev_permille;
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t service_chassis_set_limits(uint16_t cmd_timeout_ms,
+                                          int16_t max_vx_mm_s,
+                                          int16_t max_vy_mm_s,
+                                          int16_t max_wz_mrad_s)
+{
+    if (s_chassis.initialized == PLATFORM_FALSE)
+    {
+        return PLATFORM_ERR_NOT_INITIALIZED;
+    }
+
+    if ((cmd_timeout_ms == 0u) || (max_vx_mm_s <= 0) ||
+        (max_vy_mm_s <= 0) || (max_wz_mrad_s <= 0))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    s_chassis.cfg.cmd_timeout_ms = cmd_timeout_ms;
+    s_chassis.cfg.max_vx_mm_s = max_vx_mm_s;
+    s_chassis.cfg.max_vy_mm_s = max_vy_mm_s;
+    s_chassis.cfg.max_wz_mrad_s = max_wz_mrad_s;
 
     return PLATFORM_ERR_OK;
 }
@@ -700,7 +888,6 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
     uint32_t age;
     platform_bool_t timed_out_now = PLATFORM_FALSE;
     float_t  dt_s;
-    float_t  counts_to_mm;
     uint8_t  i;
 
     if (s_chassis.initialized == PLATFORM_FALSE)
@@ -748,17 +935,7 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
         s_chassis.timed_out = PLATFORM_FALSE;
         s_chassis.pid_was_timed_out = PLATFORM_FALSE;
 
-        if (s_chassis.closed_loop == PLATFORM_TRUE)
-        {
-            dt_s = (float_t)dt_ms / 1000.0f;
-            counts_to_mm =
-                1000.0f / (float_t)s_chassis.cfg.counts_per_mm_x1000;
-        }
-        else
-        {
-            dt_s = 0.0f;
-            counts_to_mm = 0.0f;
-        }
+        dt_s = (float_t)dt_ms / 1000.0f;
 
         for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
         {
@@ -767,7 +944,8 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
             /* Speed feedback is what the dead-zone sweep keys on. */
             if (s_chassis.closed_loop == PLATFORM_TRUE)
             {
-                (void)service_chassis_speed_mm_s(i, dt_s, counts_to_mm);
+                (void)service_chassis_speed_mm_s(
+                          i, dt_s, service_chassis_wheel_counts_to_mm(i));
             }
 
             if ((now_ms - s_chassis.test_duty_ms[i]) <=
@@ -851,7 +1029,6 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
     if (s_chassis.closed_loop == PLATFORM_TRUE)
     {
         dt_s = (float_t)dt_ms / 1000.0f;
-        counts_to_mm = 1000.0f / (float_t)s_chassis.cfg.counts_per_mm_x1000;
 
         for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
         {
@@ -859,7 +1036,9 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
             float_t duty;
             int16_t target_mm_s;
 
-            measured_mm_s = service_chassis_speed_mm_s(i, dt_s, counts_to_mm);
+            measured_mm_s = service_chassis_speed_mm_s(
+                                i, dt_s,
+                                service_chassis_wheel_counts_to_mm(i));
 
             target_mm_s = service_chassis_clamp_speed(
                               (int32_t)wheel_target[i],
@@ -882,6 +1061,35 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
                                            (float_t)target_mm_s,
                                            measured_mm_s,
                                            dt_s);
+
+                /*
+                 * Reliable-start compensation. Only while the wheel is still
+                 * at rest: once it turns, the loop must be free to brake
+                 * below this duty without the floor holding the motor on.
+                 * A calibrated value of 0 disables the whole thing.
+                 */
+                if ((target_mm_s != 0) &&
+                    (measured_mm_s <= SERVICE_CHASSIS_ZERO_SPEED_EPS_MM_S) &&
+                    (measured_mm_s >= -SERVICE_CHASSIS_ZERO_SPEED_EPS_MM_S))
+                {
+                    if ((target_mm_s > 0) &&
+                        (duty < (float_t)s_chassis.start_duty_fwd_permille[i]))
+                    {
+                        duty = (float_t)
+                                   s_chassis.start_duty_fwd_permille[i];
+                    }
+                    else if ((target_mm_s < 0) &&
+                             (duty > -(float_t)
+                                          s_chassis.start_duty_rev_permille[i]))
+                    {
+                        duty = -(float_t)
+                                   s_chassis.start_duty_rev_permille[i];
+                    }
+                    else
+                    {
+                        /* The loop already commands more than the start duty. */
+                    }
+                }
             }
 
             s_chassis.applied_duty[i] = service_chassis_pid_duty(duty);
@@ -916,16 +1124,13 @@ void service_chassis_update_odometry(uint32_t dt_ms)
     float   d_theta;
     float   h_mid;
     float   dt_s;
-    float   scale;
     uint8_t i;
 
     if ((s_chassis.initialized == PLATFORM_FALSE) || (dt_ms == 0u) ||
-        (s_chassis.cfg.counts_per_mm_x1000 <= 0))
+        (s_chassis.closed_loop == PLATFORM_FALSE))
     {
         return;
     }
-
-    scale = 1000.0f / (float)s_chassis.cfg.counts_per_mm_x1000;
 
     for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
     {
@@ -942,7 +1147,9 @@ void service_chassis_update_odometry(uint32_t dt_ms)
                               (uint32_t)s_chassis.prev_counts[i]);
         s_chassis.prev_counts[i] = now_counts;
 
-        d_mm[i] = (float)counts[i] * scale;
+        d_mm[i] = (float)counts[i] *
+                  service_chassis_wheel_counts_to_mm(i) *
+                  (float)service_chassis_wheel_dir(i);
     }
 
     dx_body = (d_mm[SERVICE_CHASSIS_WHEEL_FL] + d_mm[SERVICE_CHASSIS_WHEEL_FR] +
