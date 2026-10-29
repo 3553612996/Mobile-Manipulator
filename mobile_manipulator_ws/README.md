@@ -19,6 +19,7 @@ mobile_manipulator_ws/
     ├── robot_interfaces/   自定义 msg / srv / action
     ├── robot_bringup/      launch、参数、地图、URDF
     ├── robot_base/         串口桥接、里程计
+    ├── robot_lidar/        X2 雷达驱动、/scan、点云
     ├── robot_arm/          关节控制、逆解、抓取
     ├── robot_vision/       图像输入、推理、目标定位
     ├── robot_speech/       Vosk 识别、意图解析
@@ -43,6 +44,7 @@ source install/setup.bash
 | `robot_interfaces` | 所有自定义消息、服务、动作 | `RobotStatus`、`SystemEvent`、`ClearFault`、`GetVersion`、`Grasp` |
 | `robot_bringup` | 启动编排、参数、地图、URDF | launch 文件 |
 | `robot_base` | ROS 2 话题 ↔ 串口帧，唯一的底盘硬件边界 | `/cmd_vel`、`/odom`、`/robot_status`、`/system_event` |
+| `robot_lidar` | YDLIDAR X2 串口驱动，输出扫描与点云 | `/scan`、`/lidar/points` |
 | `robot_arm` | 关节目标下发、逆解、抓取序列 | `/joint_states`、`/grasp` |
 | `robot_vision` | 图像 → 检测框 → 三维坐标 | `/camera/color/image_raw`、`/detections` |
 | `robot_speech` | 音频 → 文本 → 意图 | 语音事件 / 意图 |

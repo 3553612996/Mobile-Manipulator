@@ -1,0 +1,22 @@
+# YDLIDAR X2 的 USB 转接板（CP2102）固定设备名。
+#
+# 安装：
+#   sudo cp config/udev/99-robot-lidar.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   sudo usermod -aG dialout $USER      # 重新登录后生效
+#
+# 之后节点默认使用 /dev/robot_lidar。
+#
+# 注意：
+# 1. 如果转接板是 CH340（1a86:7523），这条规则不会匹配。PC 测试时直接
+#    用 /dev/ttyUSB0 并把 lidar.yaml 的 port 改过去即可。
+# 2. 上车后如果雷达也是 CH340，会和 STM32 主控同 VID/PID，两条规则会
+#    抢同一个 /dev/robot_stm32。此时必须按序列号或物理口区分，例如：
+#      SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", \
+#          KERNELS=="1-1.2", SYMLINK+="robot_lidar", GROUP="dialout", MODE="0660"
+#    KERNELS 用 `udevadm info -a -n /dev/ttyUSB1 | grep KERNELS` 查，换 USB
+#    口后要重新确认。
+# 3. CP2102 也常用于其他设备；如果车上有多颗 CP2102，同样要按序列号或
+#    物理口区分。
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", \
+    SYMLINK+="robot_lidar", GROUP="dialout", MODE="0660"

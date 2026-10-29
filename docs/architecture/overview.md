@@ -82,11 +82,12 @@ RK3566
 | --- | --- | --- |
 | 应用层 | `robot_task` | 任务状态机，编排导航、抓取、语音 |
 | 功能层 | `robot_vision` `robot_arm` `robot_speech` | 视觉推理、机械臂解算、语音识别 |
+| 传感器层 | `robot_lidar` | X2 雷达串口驱动，输出 `/scan` 与点云 |
 | 中间件 | Nav2 / SLAM Toolbox / TF2 | 开箱组件，只做配置与集成 |
 | 桥接层 | `robot_base` | ROS 2 话题 ↔ 串口帧，是唯一的硬件边界 |
 | 系统层 | systemd / 日志 / 监控 | 进程托管、日志轮转、资源监控 |
 
-**关键约束**：只有 `robot_base` 和 `robot_arm` 知道串口的存在。上层节点只跟 ROS 2 接口打交道，这样任何节点都可以在 PC 上跑仿真、录包回放。
+**关键约束**：只有底层驱动包（`robot_base`、`robot_lidar`、`robot_arm`）知道各自串口/设备的存在。上层节点只跟 ROS 2 接口打交道，这样任何节点都可以在 PC 上跑仿真、录包回放。
 
 ### 3.2 STM32 侧
 

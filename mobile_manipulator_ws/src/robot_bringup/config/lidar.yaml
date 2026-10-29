@@ -1,0 +1,40 @@
+x2_lidar:
+  ros__parameters:
+    # X2 USB 转接板（CP2102）的固定设备名，由 config/udev/99-robot-lidar.rules 建立。
+    # 如果用的是 CH340 转接板，把 port 改成实际设备（如 /dev/ttyUSB1）。
+    port: "/dev/robot_lidar"
+    baud: 115200
+
+    # 雷达坐标系；RViz 的 Fixed Frame 可以先设成 laser_link，等 URDF 加入后再由
+    # base_link -> laser_link 的静态变换提供。
+    frame_id: "laser_link"
+
+    # 安装偏航角，CCW 为正，单位度。雷达 0° 在正前方，和 REP-103 的 x 轴一致。
+    angle_offset_deg: 0.0
+
+    # X2 数据手册定义角度顺时针为正；ROS REP-103 逆时针为正。默认取反，
+    # 让 /scan 与 laser_link 坐标系一致。商家 X2.yaml 用 inverted=false
+    # （保持顺时针），需要与商家驱动逐点对比时设为 false。
+    invert_angle: true
+
+    # X2 量程 0.12~8 m；越界点直接丢弃，LaserScan 对应 bin 填 inf。
+    range_min_m: 0.12
+    range_max_m: 8.0
+
+    # LaserScan 的角分辨率：720 个 bin 即 0.5°。X2 在 6 Hz 下约 0.72°，
+    # 720 个 bin 不会丢失角度信息，也给后续 SLAM 一个统一的分辨率。
+    scan_bins: 720
+
+    publish_scan: true
+    publish_pointcloud: true
+
+    # USB 转接板用 DTR 控制电机：上电后雷达待机，DTR 拉高才转。
+    # 直连 UART（没有 DTR 线）时设为 false，否则会打印一次 DTR 失败告警。
+    motor_dtr: true
+
+    # 仅用于 LaserScan.scan_time 的默认值；收到起始包后会用包里的实测频率覆盖。
+    scan_frequency_hz: 6.0
+
+    # 串口读取周期；115200 下 10 ms 约 115 字节，4096 缓冲足够。
+    timer_period_ms: 10
+    reconnect_period_s: 2.0
