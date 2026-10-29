@@ -428,6 +428,23 @@ platform_err_t platform_os_queue_create(const char *name,
         return PLATFORM_ERR_NO_MEMORY;
     }
 
+    /*
+     * No tick-dependent work may run with interrupts masked.
+     *
+     * The ARM_CM3 port starts uxCriticalNesting at 0xAAAAAAAA, so the
+     * taskENTER/EXIT pair inside xQueueCreateStatic never reaches the branch
+     * that clears BASEPRI. Normally the first SVC does it, but main() keeps
+     * calling HAL_Delay()/flash waits after the queues exist, and the HAL
+     * timebase (TIM6) sits at the lowest priority -- masked together with
+     * everything else. Booting past that point used to freeze the tick and
+     * hang the flash power-up delay forever. Restore the mask now that the
+     * queue is built and no critical section is open.
+     */
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED)
+    {
+        portENABLE_INTERRUPTS();
+    }
+
     slot->used = PLATFORM_TRUE;
     *out_queue = slot;
 
