@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QPushButton,
 
 from . import protocol as p
 from .protocol import Cmd
-from .widgets import CRITICAL, GOOD, SliderRow, StatTile, Card
+from .widgets import (CRITICAL, GOOD, Card, SliderRow, StatTile,
+                      WheelTraceChart)
 
 TUNING_MAX_V = 150          # mm/s, host-side only
 GAIN_SCALE = 1000           # slider int -> gain, matches SET_PARAM
@@ -77,6 +78,12 @@ class TuningPage(QWidget):
         columns.addWidget(self._build_gain_card(), 1)
         columns.addWidget(self._build_speed_card(), 0)
         layout.addLayout(columns, 1)
+
+        trace_card = Card("速度跟随",
+                          "实线 = 实测轮速，虚线 = 目标 · 最近 6 s")
+        self.trace = WheelTraceChart(p.WHEEL_NAMES)
+        trace_card.body.addWidget(self.trace, 1)
+        layout.addWidget(trace_card, 1)
 
     def _build_gain_card(self) -> QWidget:
         card = Card("轮速环增益", "同一组滑条写入所有选中的轮")
@@ -290,17 +297,31 @@ class TuningPage(QWidget):
         self.test_speed.slider.blockSignals(False)
         self.test_speed._update_text()
 
+    # ================================================================ trace
+
+    def add_wheel_sample(self, data: dict, now: float) -> None:
+        """Feed one REPORT_WHEEL_SPEED frame; the target is what we command."""
+        if not self.isVisible():
+            return
+        speeds = (data["fl_mm_s"], data["fr_mm_s"],
+                  data["rl_mm_s"], data["rr_mm_s"])
+        target = float(self.host.v_target) if self.host.enabled else 0.0
+        self.trace.add_sample(now, speeds, target)
+
     # ================================================================ state
 
     def on_enter(self) -> None:
         self.reset_test_speed()
         self.status.setStyleSheet("")
         self.status.setText("选择轮后拖动滑条；松开 250 ms 后写入")
+        self.trace.clear()
+        self.trace.set_connected(self.host.connected)
         self._refresh()
 
     def on_leave(self) -> None:
         self.reset_test_speed()
         self.status.setStyleSheet("")
+        self.trace.clear()
         for timer in self._timers:
             timer.stop()
 
@@ -325,6 +346,8 @@ class TuningPage(QWidget):
 
         if not self.host.enabled and self.test_speed.value() != 0:
             self.reset_test_speed()
+
+        self.trace.set_connected(self.host.connected)
 
         now = time.monotonic()
         speeds = self.host.last_wheel_speed

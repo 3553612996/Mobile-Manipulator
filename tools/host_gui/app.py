@@ -788,6 +788,8 @@ class HostWindow(QMainWindow):
             if data:
                 self.last_wheel_speed = data
                 self.wheel_at = now
+                if self.tuning_active:
+                    self.tuning_page.add_wheel_sample(data, now)
 
         if self.show_reports.isChecked() and now - self._last_report_log >= 0.1:
             self._last_report_log = now

@@ -589,6 +589,255 @@ class SpeedChart(QWidget):
         path = QPainterPath()
         path.addRoundedRect(box, 6, 6)
         painter.fillPath(path, color(SURFACE_3))
+        # drawPath strokes *and* fills; drop the marker brush first.
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(color(BASELINE), 1.0))
+        painter.drawPath(path)
+        painter.setPen(color(INK_2))
+        painter.drawText(box, Qt.AlignCenter, text)
+
+
+class WheelTraceChart(QWidget):
+    """Wheel speed against the commanded target, last 6 seconds.
+
+    One small multiple per wheel instead of four lines in one plot: the
+    categorical palette only validates three slots for all-pairs separation,
+    and four wheel traces cross each other constantly. Each panel carries one
+    series plus the shared dashed target, so wheel identity comes from the
+    panel title rather than from hue.
+    """
+
+    WINDOW_S = 6.0
+    MIN_LIMIT = 50.0
+
+    def __init__(self, names, parent=None):
+        super().__init__(parent)
+        self._names = tuple(names)
+        self.setMinimumHeight(150)
+        self.setMouseTracking(True)
+        self._samples: deque[tuple[float, float, float, float, float, float]] = \
+            deque(maxlen=1200)
+        self._hover: QPointF | None = None
+        self._dirty = False
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+        self.connected = False
+
+    # -- data -------------------------------------------------------------
+
+    def add_sample(self, t: float, speeds, target: float) -> None:
+        self._samples.append((t, float(speeds[0]), float(speeds[1]),
+                              float(speeds[2]), float(speeds[3]),
+                              float(target)))
+        cutoff = t - self.WINDOW_S - 1.0
+        while self._samples and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+        self._dirty = True
+
+    def clear(self) -> None:
+        self._samples.clear()
+        self._dirty = True
+        self.update()
+
+    def set_connected(self, connected: bool) -> None:
+        if self.connected != connected:
+            self.connected = connected
+            self.update()
+
+    def _tick(self) -> None:
+        if self._dirty:
+            self._dirty = False
+            self.update()
+
+    # -- geometry ---------------------------------------------------------
+
+    def _plot_rect(self) -> QRectF:
+        return QRectF(40, 24, max(10.0, self.width() - 40 - 8),
+                      max(10.0, self.height() - 24 - 20))
+
+    def _panels(self) -> list[QRectF]:
+        rect = self._plot_rect()
+        gap = 10.0
+        width = max(10.0, (rect.width() - gap * 3) / 4.0)
+        return [QRectF(rect.left() + index * (width + gap), rect.top(),
+                       width, rect.height()) for index in range(4)]
+
+    def _range(self) -> float:
+        peak = 0.0
+        for sample in self._samples:
+            for value in sample[1:]:
+                peak = max(peak, abs(value))
+        return max(self.MIN_LIMIT, math.ceil(peak * 1.15 / 50.0) * 50.0)
+
+    def _x_for(self, t: float, now: float, rect: QRectF) -> float:
+        return rect.right() - (now - t) / self.WINDOW_S * rect.width()
+
+    def _y_for(self, value: float, limit: float, rect: QRectF) -> float:
+        return rect.center().y() - value / limit * (rect.height() / 2.0)
+
+    def _panel_at(self, x: float) -> int | None:
+        for index, rect in enumerate(self._panels()):
+            if rect.left() <= x <= rect.right():
+                return index
+        return None
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        self._hover = event.position() if self._panel_at(
+            event.position().x()) is not None else None
+        self.update()
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._hover = None
+        self.update()
+
+    # -- painting ---------------------------------------------------------
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        panels = self._panels()
+        now = time.monotonic()
+        limit = self._range()
+
+        tick_font = QFont(MONO_FONT, 8)
+        painter.setFont(tick_font)
+
+        # Shared y grid and labels: four panels on one scale stay comparable.
+        for step in (-2, -1, 0, 1, 2):
+            value = limit * step / 2.0
+            y = self._y_for(value, limit, panels[0])
+            painter.setPen(QPen(color(BASELINE if step == 0 else BORDER), 1.0))
+            for rect in panels:
+                painter.drawLine(QPointF(rect.left(), y),
+                                 QPointF(rect.right(), y))
+            painter.setPen(color(MUTED))
+            painter.drawText(QRectF(0, y - 7, panels[0].left() - 6, 14),
+                             Qt.AlignRight | Qt.AlignVCenter, f"{value:.0f}")
+
+        painter.setFont(QFont(UI_FONT, 9))
+        painter.setPen(color(INK_2))
+        for rect, name in zip(panels, self._names):
+            painter.drawText(QRectF(rect.left(), 2, rect.width(), 18),
+                             Qt.AlignLeft | Qt.AlignVCenter, name)
+
+        painter.setFont(tick_font)
+        painter.setPen(color(MUTED))
+        painter.drawText(QRectF(panels[0].left(), panels[0].bottom() + 3,
+                                90, 14),
+                         Qt.AlignLeft | Qt.AlignVCenter,
+                         f"-{int(self.WINDOW_S)}s")
+        painter.drawText(QRectF(panels[-1].right() - 90,
+                                panels[-1].bottom() + 3, 90, 14),
+                         Qt.AlignRight | Qt.AlignVCenter, "现在")
+
+        if not self._samples:
+            painter.setFont(QFont(UI_FONT, 9))
+            painter.setPen(color(MUTED))
+            empty = QRectF(panels[0].left(), panels[0].top(),
+                           panels[-1].right() - panels[0].left(),
+                           panels[0].height())
+            painter.drawText(empty, Qt.AlignCenter,
+                             "等待轮速上报…" if self.connected else "未连接")
+            return
+
+        target_pen = QPen(color(INK_2, 0.72), 1.3, Qt.DashLine)
+        target_pen.setDashPattern([4.0, 3.0])
+        actual_pen = QPen(color(SERIES_LEFT), 2.0)
+        actual_pen.setCapStyle(Qt.RoundCap)
+        actual_pen.setJoinStyle(Qt.RoundJoin)
+        last = self._samples[-1]
+
+        painter.save()
+        for index, rect in enumerate(panels):
+            painter.setClipRect(rect.adjusted(-1, -1, 1, 1))
+
+            target_points: list[QPointF] = []
+            actual_points: list[QPointF] = []
+            for t, fl, fr, rl, rr, target in self._samples:
+                if t < now - self.WINDOW_S:
+                    continue
+                x = self._x_for(t, now, rect)
+                target_points.append(
+                    QPointF(x, self._y_for(target, limit, rect)))
+                actual_points.append(
+                    QPointF(x, self._y_for((fl, fr, rl, rr)[index],
+                                           limit, rect)))
+
+            if len(actual_points) >= 2:
+                painter.setPen(actual_pen)
+                painter.drawPolyline(QPolygonF(actual_points))
+            if len(target_points) >= 2:
+                painter.setPen(target_pen)
+                painter.drawPolyline(QPolygonF(target_points))
+
+            value = (last[1], last[2], last[3], last[4])[index]
+            x = min(rect.right() - 1.0, self._x_for(last[0], now, rect))
+            if x >= rect.left():
+                painter.setPen(QPen(color(SURFACE), 2.0))
+                painter.setBrush(color(SERIES_LEFT))
+                painter.drawEllipse(
+                    QPointF(x, self._y_for(value, limit, rect)), 4.0, 4.0)
+        painter.restore()
+
+        self._paint_hover(painter, panels, now, limit)
+
+    def _paint_hover(self, painter: QPainter, panels: list[QRectF],
+                     now: float, limit: float) -> None:
+        if self._hover is None or not self._samples:
+            return
+
+        hovered = self._panel_at(self._hover.x())
+        if hovered is None:
+            return
+
+        rect = panels[hovered]
+        best = None
+        best_dx = 1e9
+        for sample in self._samples:
+            if sample[0] < now - self.WINDOW_S:
+                continue
+            dx = abs(self._x_for(sample[0], now, rect) - self._hover.x())
+            if dx < best_dx:
+                best, best_dx = sample, dx
+        if best is None or best_dx > 18:
+            return
+
+        t, fl, fr, rl, rr, target = best
+        for panel in panels:
+            x = self._x_for(t, now, panel)
+            painter.setPen(QPen(color(INK_2, 0.28), 1.0))
+            painter.drawLine(QPointF(x, panel.top()), QPointF(x, panel.bottom()))
+
+        for panel, value in zip(panels, (fl, fr, rl, rr)):
+            x = self._x_for(t, now, panel)
+            y = self._y_for(value, limit, panel)
+            painter.setPen(QPen(color(SURFACE), 2.0))
+            painter.setBrush(color(SERIES_LEFT))
+            painter.drawEllipse(QPointF(x, y), 4.0, 4.0)
+
+        text = (f"-{now - t:.1f}s  目标 {target:>4.0f}   "
+                f"A {fl:>4.0f}  B {fr:>4.0f}  C {rl:>4.0f}  "
+                f"D {rr:>4.0f} mm/s")
+        font = QFont(MONO_FONT, 8)
+        painter.setFont(font)
+        metrics = QFontMetricsF(font)
+        width = metrics.horizontalAdvance(text) + 16
+        height = 22.0
+        box_x = self._hover.x() + 10
+        if box_x + width > panels[-1].right():
+            box_x = self._hover.x() - 10 - width
+        box_y = max(panels[0].top(),
+                    min(self._hover.y() - height - 8,
+                        panels[0].bottom() - height))
+        box = QRectF(box_x, box_y, width, height)
+        path = QPainterPath()
+        path.addRoundedRect(box, 6, 6)
+        painter.fillPath(path, color(SURFACE_3))
+        # drawPath strokes *and* fills, so clear the marker brush or it
+        # repaints the tooltip in the series colour.
+        painter.setBrush(Qt.NoBrush)
         painter.setPen(QPen(color(BASELINE), 1.0))
         painter.drawPath(path)
         painter.setPen(color(INK_2))
