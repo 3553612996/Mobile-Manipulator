@@ -1,0 +1,8 @@
+# 清除故障，对应 MCU CLEAR_FAULT (0x07)。
+# v0 草案。
+
+uint16 fault_code  # 0xFFFF 表示清除全部
+---
+bool success
+uint8 result_code  # 0 成功，1 参数越界，2 当前状态不允许，3 未知命令，4 执行失败
+string message

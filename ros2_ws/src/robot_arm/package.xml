@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>robot_arm</name>
+  <version>0.2.0</version>
+  <description>六轴机械臂关节控制、逆解与抓取序列。</description>
+  <maintainer email="3553612993@qq.com">wuying</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>robot_interfaces</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

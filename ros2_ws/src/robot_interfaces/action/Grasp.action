@@ -1,0 +1,16 @@
+# 抓取动作：长任务，支持取消与进度反馈。
+# v0 草案：字段在 M8 抓取闭环前冻结。
+
+# goal
+string object_class
+geometry_msgs/PoseStamped target_pose
+bool use_target_pose
+---
+# result
+bool success
+uint16 reason_code  # 0 成功，1 未找到目标，2 逆解失败，3 碰撞/超限，4 超时，5 未夹住
+string message
+---
+# feedback
+string stage
+uint8 progress  # 0~100

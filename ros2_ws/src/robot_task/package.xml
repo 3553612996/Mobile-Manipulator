@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>robot_task</name>
+  <version>0.2.0</version>
+  <description>任务状态机：编排导航、视觉、机械臂与语音，不依赖具体实现。</description>
+  <maintainer email="3553612993@qq.com">wuying</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>robot_interfaces</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

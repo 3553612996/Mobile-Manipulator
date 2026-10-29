@@ -15,6 +15,7 @@ firmware/
 └── shared/       两端共用：协议、CRC、故障码定义
 
 ros2_ws/src/
+├── robot_interfaces/ 自定义 msg / srv / action
 ├── robot_bringup/   launch + 参数 + 地图 + URDF
 ├── robot_base/      串口桥接、里程计
 ├── robot_arm/       关节控制、逆解、轨迹
@@ -33,6 +34,7 @@ ros2_ws/src/
 
 | 包 | 职责 | 依赖 |
 | --- | --- | --- |
+| `robot_interfaces` | 自定义消息、服务、动作 | 仅 rosidl |
 | `robot_bringup` | 启动编排、参数、地图 | 全部 |
 | `robot_base` | `/cmd_vel` ↔ 串口；串口 → `/odom` | 无（只依赖 rclcpp + serial） |
 | `robot_arm` | 关节目标下发、逆解、抓取序列 | KDL / TRAC-IK |
@@ -56,8 +58,8 @@ ros2_ws/src/
 | `/camera/color/image_raw` | `sensor_msgs/Image` | 30 Hz | BEST_EFFORT |
 | `/joint_states` | `sensor_msgs/JointState` | 20 Hz | RELIABLE |
 | `/detections` | `vision_msgs/Detection2DArray` | 10 Hz | BEST_EFFORT |
-| `/robot_status` | 自定义 `RobotStatus` | 10 Hz | RELIABLE |
-| `/system_event` | 自定义 `SystemEvent` | 事件触发 | RELIABLE |
+| `/robot_status` | `robot_interfaces/RobotStatus` | 10 Hz | RELIABLE |
+| `/system_event` | `robot_interfaces/SystemEvent` | 事件触发 | RELIABLE |
 
 **QoS 的选择理由**：
 
@@ -70,14 +72,14 @@ ros2_ws/src/
 | 服务 | 类型 | 用途 |
 | --- | --- | --- |
 | `/set_enable` | `std_srvs/SetBool` | 使能 / 失能底盘与机械臂 |
-| `/clear_fault` | 自定义 | 清除故障码（条件未消失时拒绝） |
-| `/get_version` | 自定义 | 返回 app / bootloader 版本与 git hash |
+| `/clear_fault` | `robot_interfaces/ClearFault` | 清除故障码（条件未消失时拒绝） |
+| `/get_version` | `robot_interfaces/GetVersion` | 返回 app / bootloader 版本与 git hash |
 
 ### 3.3 动作
 
 | 动作 | goal | feedback | result |
 | --- | --- | --- | --- |
-| `/grasp` | 目标类别、可选指定位姿 | 阶段、进度百分比 | 成功 / 失败原因码 |
+| `/grasp`（`robot_interfaces/action/Grasp`） | 目标类别、可选指定位姿 | 阶段、进度百分比 | 成功 / 失败原因码 |
 
 导航直接用 Nav2 的 `NavigateToPose`，不重新定义。
 

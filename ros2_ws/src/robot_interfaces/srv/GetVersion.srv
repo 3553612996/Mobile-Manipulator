@@ -1,0 +1,8 @@
+# 查询 app / bootloader 版本与 git hash。
+# v0 草案。
+
+---
+string app_version
+string bootloader_version
+string git_hash
+uint16 protocol_version  # 当前协议版本为 1

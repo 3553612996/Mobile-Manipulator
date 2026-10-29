@@ -40,12 +40,13 @@
 | [编码规范](docs/conventions/coding-style.md) | 命名、错误处理、ISR 约束 |
 | [自测规范](docs/conventions/testing.md) | 测试分层、故障注入、发版检查 |
 | [AI 使用说明](docs/conventions/ai-usage.md) | 使用边界与验证要求 |
+| [M1 测试报告](docs/nodes/m1/test-report.md) | ROS 2 工作空间骨架、静态检查、板端构建待补项 |
 | [M2 测试报告](docs/nodes/m2/test-report.md) | 协议闭环的台架结果、缺陷记录、已知限制 |
 | [M2 架构分层检查](docs/nodes/m2/layering-audit.md) | 分层解耦检查方法、证据与差异说明 |
 
 ## 开发进度
 
-- [ ] 板端环境与 ROS 2 工作空间
+- [x] 板端环境与 ROS 2 工作空间（骨架完成，板端构建待补）——见 [M1 测试报告](docs/nodes/m1/test-report.md)
 - [x] 串口通信打通（协议解析 + CRC 校验 + 超时重发）——见 [M2 测试报告](docs/nodes/m2/test-report.md)
 - [ ] 底盘闭环：PWM / 编码器 / PID / 里程计
 - [ ] 激光建图与定位
