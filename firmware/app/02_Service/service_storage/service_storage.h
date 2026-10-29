@@ -122,6 +122,13 @@ typedef enum
     SERVICE_STORAGE_RING_COUNT = 2
 } service_storage_ring_t;
 
+/*
+ * Iteration types of the rings, named here so a caller that walks an export
+ * does not have to pull platform_logstore.h into its own layer.
+ */
+typedef platform_logstore_iter_t   service_storage_iter_t;
+typedef platform_logstore_entry_t  service_storage_entry_t;
+
 typedef struct
 {
     uint8_t     flags;
@@ -173,8 +180,16 @@ platform_err_t service_storage_append(service_storage_ring_t ring,
                                       uint32_t now_ms);
 
 platform_err_t service_storage_iter_begin(service_storage_ring_t ring,
-                                          platform_logstore_iter_t *iter,
+                                          service_storage_iter_t *iter,
                                           uint32_t from_seq);
+
+/*
+ * Advance one record. Any error means "nothing more to read": the ring end and
+ * an I/O fault are reported the same way because the caller's only sane
+ * reaction to both is to close the export.
+ */
+platform_err_t service_storage_iter_next(service_storage_iter_t *iter,
+                                         service_storage_entry_t *entry);
 
 /* Erase-logically clear a ring (header invalidation, see platform_logstore). */
 platform_err_t service_storage_ring_clear(service_storage_ring_t ring,

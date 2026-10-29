@@ -76,6 +76,27 @@ platform_err_t service_chassis_set_geometry(int16_t half_length_mm,
     return PLATFORM_ERR_OK;
 }
 
+/*
+ * The real formula is exercised in test_service_chassis.c; here the stub only
+ * has to be an independent implementation of "counts_per_rev / (pi * d)", so
+ * a wrong argument order or a missing call still shows up.
+ */
+int32_t service_chassis_counts_per_mm_x1000(int32_t counts_per_rev,
+                                            int32_t diameter_mm)
+{
+    double value;
+
+    if (diameter_mm == 0)
+    {
+        return 0;
+    }
+
+    value = ((double)counts_per_rev * 1000.0) / (3.14159265358979323846 *
+                                                 (double)diameter_mm);
+
+    return (int32_t)(value + 0.5);
+}
+
 platform_err_t service_chassis_set_wheel_scale(uint8_t wheel,
                                                int32_t counts_per_mm_x1000,
                                                int8_t dir)

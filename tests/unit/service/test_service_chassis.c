@@ -158,6 +158,27 @@ static void test_inverse_kinematics(void)
           wheel[2] == 32767 && wheel[3] == 0, "clamp to int16");
 }
 
+/* ------------------------- encoder scale ------------------------------ */
+
+static void test_counts_per_mm(void)
+{
+    /* 4680 counts/rev on a 60 mm wheel: 4680 / (pi * 60) = 24.828. */
+    CHECK(service_chassis_counts_per_mm_x1000(4680, 60) == 24828,
+          "60 mm wheel gives 24.828 counts/mm");
+
+    /* 65 mm is the case the x1000 integer exists for: 22.918. */
+    CHECK(service_chassis_counts_per_mm_x1000(4680, 65) == 22918,
+          "65 mm wheel gives 22.918 counts/mm");
+
+    /* 59 mm is 25248.99: rounding gives 25249, a plain cast would give 25248. */
+    CHECK(service_chassis_counts_per_mm_x1000(4680, 59) == 25249,
+          "rounds instead of truncating");
+
+    /* A zero diameter must not divide by zero. */
+    CHECK(service_chassis_counts_per_mm_x1000(4680, 0) == 0,
+          "zero diameter returns 0");
+}
+
 /* ------------------------------- service ------------------------------- */
 
 static void test_enable_and_duty(void)
@@ -694,6 +715,7 @@ static void test_odometry(void)
 int main(void)
 {
     test_inverse_kinematics();
+    test_counts_per_mm();
     test_enable_and_duty();
     test_velocity_limits();
     test_timeout();

@@ -6,7 +6,7 @@
  * @par dependencies
  * - app_storage.h
  * - app_robot_config.h
- * - service_storage.h, service_proto.h, platform_logstore.h
+ * - service_storage.h, service_proto.h
  * - platform_os_task.h, platform_os_time.h
  *
  * @author wuying <3553612993@qq.com>
@@ -39,7 +39,6 @@
 #include "platform_os_task.h"
 #include "platform_os_time.h"
 #include "platform_os_critical.h"
-#include "platform_logstore.h"
 
 //******************************** Defines **********************************//
 
@@ -78,8 +77,8 @@ static struct
     platform_bool_t             active;
     uint8_t                     source;
     uint32_t                    last_emit_ms;
-    platform_logstore_iter_t    iter;
-    platform_logstore_entry_t   entry;
+    service_storage_iter_t      iter;
+    service_storage_entry_t     entry;
 } s_export;
 
 static struct
@@ -234,7 +233,7 @@ static void s_produce_log(uint32_t now_ms)
     app_storage_export_t item;
     platform_err_t err;
 
-    err = platform_logstore_iter_next(&s_export.iter, &s_export.entry);
+    err = service_storage_iter_next(&s_export.iter, &s_export.entry);
     if (PLATFORM_IS_ERR(err))
     {
         /*
