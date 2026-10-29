@@ -43,12 +43,13 @@
 | [M1 测试报告](docs/nodes/m1/test-report.md) | ROS 2 工作空间骨架、静态检查、板端构建待补项 |
 | [M2 测试报告](docs/nodes/m2/test-report.md) | 协议闭环的台架结果、缺陷记录、已知限制 |
 | [M2 架构分层检查](docs/nodes/m2/layering-audit.md) | 分层解耦检查方法、证据与差异说明 |
+| [M3 测试报告](docs/nodes/m3/test-report.md) | 四轮速度环的 PC 结果、未标定项与下一步 |
 
 ## 开发进度
 
 - [x] 板端环境与 ROS 2 工作空间（骨架完成，板端构建待补）——见 [M1 测试报告](docs/nodes/m1/test-report.md)
 - [x] 串口通信打通（协议解析 + CRC 校验 + 超时重发）——见 [M2 测试报告](docs/nodes/m2/test-report.md)
-- [ ] 底盘闭环：PWM / 编码器 / PID / 里程计
+- [ ] 底盘闭环：PWM / 编码器 / PID / 里程计（速度环 L1 完成，台架/标定待轮胎）
 - [ ] 激光建图与定位
 - [ ] Nav2 导航
 - [ ] 相机内参与手眼标定

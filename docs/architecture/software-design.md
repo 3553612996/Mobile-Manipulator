@@ -183,13 +183,15 @@ FreeRTOS 上跑五个任务，按优先级从高到低：
 
 | 任务 | 优先级 | 周期 | 栈 | 职责 |
 | --- | --- | --- | --- | --- |
-| `control_task` | `osPriorityRealtime` | 1 ms | 512 B | 读编码器 → PID → 更新 PWM |
+| `control_task` | `osPriorityRealtime` | 10 ms | 512 B | 读编码器 → PID → 更新 PWM |
 | `motion_task` | `osPriorityHigh` | 10 ms | 512 B | 六轴插补、限位与奇异检查 |
 | `proto_task` | `osPriorityAboveNormal` | 事件（任务通知） | 512 B | 帧解析、CRC、序号去重 |
 | `report_task` | `osPriorityNormal` | 20 ms | 512 B | 组帧上报里程计/关节/状态 |
 | `app_task` | `osPriorityLow` | 事件（队列） | 768 B | 状态机、参数读写、故障处理 |
 
-**为什么是这五层而不是更多**：每个任务的节奏差一个数量级，再细分只会增加同步复杂度。通信超时检查放在 `control_task` 里（1 ms 检查一次，比单独开 10 ms 任务更灵敏）；Flash 写入这类耗时为百毫秒级的操作单独放 `app_task` 的低优先级里慢慢做，不会抢占控制环。
+**为什么是这五层而不是更多**：每个任务的节奏差一个数量级，再细分只会增加同步复杂度。通信超时检查放在 `control_task` 里（与速度环同周期，10 ms 检查一次）；Flash 写入这类耗时为百毫秒级的操作单独放 `app_task` 的低优先级里慢慢做，不会抢占控制环。
+
+速度环取 10 ms 而不是 1 ms：当前 13 线编码器经 4 倍频、1:90 减速后约 24828 counts/mm，1 ms 内一个计数相当于约 40 mm/s，PID 反馈会被量化噪声主导。10 ms 下仍有 100 Hz 的控制频率，且四个浮点环与里程计都在控制任务预算内。若后续换更高线数编码器或加装速度滤波，再评估提高控制频率。
 
 #### 中断与任务的边界
 
