@@ -32,11 +32,20 @@
 
 //******************************** Declaring ********************************//
 
+/* Messages on the comm -> control queue. */
+typedef enum
+{
+    APP_CTRL_MSG_PID_GAIN = 0,
+    APP_CTRL_MSG_TEST_DUTY
+} app_ctrl_msg_kind_t;
+
 typedef struct
 {
+    uint8_t kind;       /* app_ctrl_msg_kind_t. */
     uint8_t wheel;      /* SERVICE_CHASSIS_WHEEL_* */
-    uint8_t gain;       /* SERVICE_CHASSIS_PID_* */
-    float_t value;      /* Gain, not scaled. */
+    uint8_t gain;       /* SERVICE_CHASSIS_PID_*, gain messages only. */
+    int16_t duty;       /* Permille, test-duty messages only. */
+    float_t value;      /* Gain, not scaled, gain messages only. */
 } app_pid_param_msg_t;
 
 void app_tasks_comm_entry(void *argument);
@@ -48,6 +57,12 @@ void app_tasks_control_entry(void *argument);
  */
 platform_bool_t app_tasks_post_pid_param(uint8_t wheel, uint8_t gain,
                                          float_t value);
+
+/*
+ * Queue one open-loop test duty (permille) for the control task. Same queue
+ * and same failure contract as the gain setter.
+ */
+platform_bool_t app_tasks_post_test_duty(uint8_t wheel, int16_t duty);
 
 /*
  * Ask the comm task to latch an emergency stop. Called from the control task

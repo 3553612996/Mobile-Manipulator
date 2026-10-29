@@ -55,9 +55,32 @@ platform_bool_t app_tasks_post_pid_param(uint8_t wheel, uint8_t gain,
         return PLATFORM_FALSE;
     }
 
+    msg.kind = (uint8_t)APP_CTRL_MSG_PID_GAIN;
     msg.wheel = wheel;
     msg.gain = gain;
+    msg.duty = 0;
     msg.value = value;
+
+    return PLATFORM_IS_OK(platform_os_queue_send(queue, &msg, 0u))
+               ? PLATFORM_TRUE
+               : PLATFORM_FALSE;
+}
+
+platform_bool_t app_tasks_post_test_duty(uint8_t wheel, int16_t duty)
+{
+    app_pid_param_msg_t msg;
+    platform_os_queue_t queue = app_user_init_pid_queue();
+
+    if (queue == NULL)
+    {
+        return PLATFORM_FALSE;
+    }
+
+    msg.kind = (uint8_t)APP_CTRL_MSG_TEST_DUTY;
+    msg.wheel = wheel;
+    msg.gain = 0u;
+    msg.duty = duty;
+    msg.value = 0.0f;
 
     return PLATFORM_IS_OK(platform_os_queue_send(queue, &msg, 0u))
                ? PLATFORM_TRUE
@@ -81,7 +104,7 @@ platform_bool_t app_tasks_take_pending_estop(void)
     return PLATFORM_TRUE;
 }
 
-static void app_tasks_drain_pid_queue(void)
+static void app_tasks_drain_pid_queue(uint32_t now_ms)
 {
     app_pid_param_msg_t msg;
     platform_os_queue_t queue = app_user_init_pid_queue();
@@ -93,10 +116,17 @@ static void app_tasks_drain_pid_queue(void)
 
     while (PLATFORM_IS_OK(platform_os_queue_receive(queue, &msg, 0u)))
     {
-        (void)service_chassis_set_pid_gain(
-                    msg.wheel,
-                    (service_chassis_pid_gain_t)msg.gain,
-                    msg.value);
+        if (msg.kind == (uint8_t)APP_CTRL_MSG_TEST_DUTY)
+        {
+            (void)service_chassis_set_test_duty(msg.wheel, msg.duty, now_ms);
+        }
+        else
+        {
+            (void)service_chassis_set_pid_gain(
+                        msg.wheel,
+                        (service_chassis_pid_gain_t)msg.gain,
+                        msg.value);
+        }
     }
 }
 
@@ -156,7 +186,7 @@ void app_tasks_control_entry(void *argument)
         (void)service_key_update(elapsed_ms);
 
         /* Gains are applied before the next PID tick, never concurrently. */
-        app_tasks_drain_pid_queue();
+        app_tasks_drain_pid_queue(now_ms);
 
         (void)service_chassis_apply(now_ms, elapsed_ms);
         service_chassis_update_odometry(elapsed_ms);

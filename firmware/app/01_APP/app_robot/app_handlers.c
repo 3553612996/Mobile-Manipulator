@@ -255,6 +255,38 @@ static protocol_result_t app_handle_set_param(const protocol_frame_t *frame,
 
     param_id = frame->payload[0];
     value = protocol_get_i32(&frame->payload[1]);
+
+    /*
+     * Bench open-loop duty (0x30..0x33). It must be refused while the chassis
+     * is off, because the state is read here and the value is applied later in
+     * the control task: an ACK 0x00 means "the control task will see a legal
+     * request", and the service re-checks enable/estop when it does.
+     */
+    if ((param_id >= PROTOCOL_PARAM_TEST_DUTY_A) &&
+        (param_id <= PROTOCOL_PARAM_TEST_DUTY_D))
+    {
+        if ((value < -APP_TEST_DUTY_MAX_PERMILLE) ||
+            (value > APP_TEST_DUTY_MAX_PERMILLE))
+        {
+            return PROTOCOL_RESULT_RANGE;
+        }
+
+        if ((service_chassis_is_enabled() == PLATFORM_FALSE) ||
+            (service_chassis_is_estopped() == PLATFORM_TRUE))
+        {
+            return PROTOCOL_RESULT_STATE;
+        }
+
+        if (app_tasks_post_test_duty(
+                (uint8_t)(param_id - PROTOCOL_PARAM_TEST_DUTY_A),
+                (int16_t)value) == PLATFORM_FALSE)
+        {
+            return PROTOCOL_RESULT_FAILED;
+        }
+
+        return PROTOCOL_RESULT_OK;
+    }
+
     wheel_count = app_handlers_pid_targets(param_id, wheels, &gain);
 
     if (wheel_count == 0u)

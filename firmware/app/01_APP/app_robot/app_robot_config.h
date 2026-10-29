@@ -94,6 +94,14 @@
 /* One gain change per wheel; one SET_PARAM may enqueue two (left/right). */
 #define APP_PID_QUEUE_LEN               ((uint32_t)8u)
 
+/*
+ * Bench open-loop duty cap, permille. Deliberately equal to the service cap so
+ * the handler rejects an out-of-range sweep with ACK 0x01 instead of letting
+ * the service silently clamp it: a bench script must not believe it drove
+ * 600 permille when the motor saw 400.
+ */
+#define APP_TEST_DUTY_MAX_PERMILLE      ((int32_t)400)
+
 /* ------------------------------- Timing --------------------------------- */
 
 #define APP_COMM_PERIOD_MS              ((uint32_t)10u)
