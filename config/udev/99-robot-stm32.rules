@@ -1,0 +1,27 @@
+# 固定 STM32 主机链路（USART3 ↔ USB 转串口）的设备名。
+#
+# 安装：
+#   sudo cp config/udev/99-robot-stm32.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   sudo usermod -aG dialout $USER      # 重新登录后生效
+#
+# 之后无论插拔顺序如何，节点都用 /dev/robot_stm32，不用管 ttyUSB0/1/2 的漂移。
+# 串口参数：115200 8N1，无硬件流控。
+
+# CH340（1a86:7523）—— 主控链路。VID/PID 是这颗芯片的通用值，
+# 板子上只挂一颗 CH340 时这条规则就够了。
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", \
+    SYMLINK+="robot_stm32", GROUP="dialout", MODE="0660"
+
+# 如果车上再接第二颗 CH340（例如 IMU），上面的规则会同时匹配两路，
+# 后插上的那个抢走 /dev/robot_stm32。此时改成按序列号或物理口绑定：
+#
+#   1) 查序列号与所在 USB 口：
+#        udevadm info -a -n /dev/ttyUSB0 | grep -E "serial|KERNELS"
+#   2) 用序列号区分（需要转串口芯片有唯一序列号）：
+#        SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", \
+#            ATTRS{serial}=="<主控那颗的序列号>", SYMLINK+="robot_stm32"
+#   3) 没有序列号就按物理口区分（换 USB 口要重新确认）：
+#        SUBSYSTEM=="tty", KERNELS=="1-1.2", SYMLINK+="robot_stm32"
+#
+# 两个 symlink 名不要重复用；IMU 建议叫 /dev/robot_imu。
