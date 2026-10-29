@@ -83,6 +83,17 @@
 
 #define APP_CHASSIS_CMD_TIMEOUT_MS      ((uint32_t)200u)
 
+/*
+ * Runtime PID tuning policy. SET_PARAM carries gain * 1000; these are the
+ * accepted maxima. They are intentionally the same order as the starting
+ * gains, so a slider accident cannot command an absurd duty.
+ */
+#define APP_PID_GAIN_MAX_X1000          ((int32_t)10000)
+#define APP_PID_KD_MAX_X1000            ((int32_t)5000)
+
+/* One gain change per wheel; one SET_PARAM may enqueue two (left/right). */
+#define APP_PID_QUEUE_LEN               ((uint32_t)8u)
+
 /* ------------------------------- Timing --------------------------------- */
 
 #define APP_COMM_PERIOD_MS              ((uint32_t)10u)
@@ -93,6 +104,7 @@
  */
 #define APP_CONTROL_PERIOD_MS           ((uint32_t)10u)
 #define APP_ODOM_PERIOD_MS              ((uint32_t)20u)    /* 50 Hz. */
+#define APP_WHEEL_SPEED_PERIOD_MS       ((uint32_t)20u)    /* 50 Hz. */
 #define APP_ARM_PERIOD_MS               ((uint32_t)50u)    /* 20 Hz. */
 #define APP_STATUS_PERIOD_MS            ((uint32_t)100u)   /* 10 Hz. */
 #define APP_HEARTBEAT_PERIOD_MS         ((uint32_t)100u)   /* 10 Hz. */

@@ -9,7 +9,8 @@ tests/
 └── unit/                    L1 单元测试：PC 上跑，不依赖硬件
     ├── protocol/            05_Middlewares/protocol
     ├── platform/            03_Platform/platform_middleware
-    └── service/             02_Service/service_*
+    ├── service/             02_Service/service_*
+    └── app/                 01_APP/app_robot
 ```
 
 ## 测试清单与节点归属
@@ -21,6 +22,8 @@ tests/
 | [`unit/service/test_service_proto.c`](unit/service/test_service_proto.c) | L1 | `02_Service/service_proto` | M2 | UART 内存管道 |
 | [`unit/service/test_service_chassis.c`](unit/service/test_service_chassis.c) | L1 | `02_Service/service_chassis` | M2（M3 继续用） | 电机桩函数 |
 | [`unit/service/test_service_key.c`](unit/service/test_service_key.c) | L1 | `02_Service/service_key` | M2 | 按键状态脚本 |
+| [`unit/app/test_app_state.c`](unit/app/test_app_state.c) | L1 | `01_APP/app_robot/app_state` | M3 | 无 |
+| [`unit/app/test_app_fault.c`](unit/app/test_app_fault.c) | L1 | `01_APP/app_robot/app_fault` | M3 | 底盘/机械臂/协议服务桩 |
 
 上位机的编解码测试在 [`tools/host_gui/test_protocol.py`](../tools/host_gui/test_protocol.py)，与被测代码同目录（依赖 `host_gui.protocol` 的 import 关系），不复制到 `tests/`。
 
@@ -41,6 +44,8 @@ L3 台架测试不在 `tests/`：它需要在真机上跑，工具是 [`tools/be
 | `test_service_proto.c` | `build/test_service_proto` |
 | `test_service_chassis.c` | `build/test_service_chassis`（需要 `-lm`） |
 | `test_service_key.c` | `build/test_service_key` |
+| `test_app_state.c` | `build/test_app_state` |
+| `test_app_fault.c` | `build/test_app_fault` |
 | `host_gui/test_protocol.py` | `python tools/host_gui/test_protocol.py` |
 
 **通过标准**：进程退出码 0。测试用 `CHECK()` 宏累计失败数，有任何一项 FAIL 都会返回非 0，CI 与手工执行都以退出码为准。

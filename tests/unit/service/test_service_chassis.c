@@ -296,6 +296,60 @@ static void test_speed_feedback(void)
           speeds[3] == speeds[0], "per-wheel speeds match");
 }
 
+static void test_pid_gain_update(void)
+{
+    service_chassis_cfg_t cfg = make_cfg();
+    float_t gain;
+
+    reset_motor_stubs();
+    CHECK(service_chassis_init(&cfg) == PLATFORM_ERR_OK, "gain init");
+
+    CHECK(service_chassis_get_pid_gain(SERVICE_CHASSIS_WHEEL_FL,
+                                       SERVICE_CHASSIS_PID_KP,
+                                       &gain) == PLATFORM_ERR_OK,
+          "gain read");
+    CHECK(gain == 2.0f, "initial gain");
+
+    /* Only FL changes; the other three keep the startup value. */
+    CHECK(service_chassis_set_pid_gain(SERVICE_CHASSIS_WHEEL_FL,
+                                       SERVICE_CHASSIS_PID_KP,
+                                       4.0f) == PLATFORM_ERR_OK,
+          "gain write");
+    CHECK(service_chassis_get_pid_gain(SERVICE_CHASSIS_WHEEL_FL,
+                                       SERVICE_CHASSIS_PID_KP,
+                                       &gain) == PLATFORM_ERR_OK,
+          "gain read back");
+    CHECK(gain == 4.0f, "FL gain updated");
+    CHECK(service_chassis_get_pid_gain(SERVICE_CHASSIS_WHEEL_FR,
+                                       SERVICE_CHASSIS_PID_KP,
+                                       &gain) == PLATFORM_ERR_OK,
+          "FR gain read");
+    CHECK(gain == 2.0f, "FR gain untouched");
+
+    CHECK(service_chassis_set_pid_gain(SERVICE_CHASSIS_WHEEL_COUNT,
+                                       SERVICE_CHASSIS_PID_KP,
+                                       1.0f) == PLATFORM_ERR_PARAM,
+          "wheel out of range");
+    CHECK(service_chassis_set_pid_gain(SERVICE_CHASSIS_WHEEL_FL,
+                                       (service_chassis_pid_gain_t)3,
+                                       1.0f) == PLATFORM_ERR_PARAM,
+          "gain index out of range");
+    CHECK(service_chassis_set_pid_gain(SERVICE_CHASSIS_WHEEL_FL,
+                                       SERVICE_CHASSIS_PID_KP,
+                                       -1.0f) == PLATFORM_ERR_PARAM,
+          "negative gain rejected");
+
+    /* The new gain is used by the next tick, from a clean integral. */
+    CHECK(service_chassis_enable(PLATFORM_TRUE, 0u) == PLATFORM_ERR_OK,
+          "gain enable");
+    (void)service_chassis_apply(0u, 10u);
+    CHECK(service_chassis_set_velocity(200, 0, 0, 10u) == PLATFORM_ERR_OK,
+          "gain target");
+    (void)service_chassis_apply(10u, 10u);
+    CHECK(g_duty[0] == 800, "FL runs at the new Kp");
+    CHECK(g_duty[1] == 400, "FR keeps the startup Kp");
+}
+
 static void test_pid_reset_on_enable(void)
 {
     service_chassis_cfg_t cfg = make_cfg();
@@ -407,6 +461,7 @@ int main(void)
     test_timeout();
     test_emergency_stop();
     test_speed_feedback();
+    test_pid_gain_update();
     test_pid_reset_on_enable();
     test_open_loop_fallback();
     test_odometry();

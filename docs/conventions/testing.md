@@ -32,6 +32,8 @@
 | `tests/unit/service/test_service_chassis.c` | `02_Service/service_chassis`：麦轮解算、四轮速度环、超时、急停、里程计 | 电机用桩函数替身 |
 | `tests/unit/service/test_service_key.c` | `02_Service/service_key`：短按/长按策略 | 按键用脚本状态替身 |
 | `tests/unit/platform/test_platform_middleware.c` | 环形缓冲、CRC、滤波、PID | 无 |
+| `tests/unit/app/test_app_state.c` | `01_APP/app_robot/app_state`：状态迁移与使能/运动许可 | 无 |
+| `tests/unit/app/test_app_fault.c` | `01_APP/app_robot/app_fault`：故障级别仲裁、作用域降级、清除条件 | 底盘/机械臂/协议服务用桩函数替身 |
 
 **测不了的**：`impl_mcu_*.c`、`impl_bsp_*.c`、`bsp_*.c`——它们直接操作寄存器和 HAL。
 
@@ -121,6 +123,10 @@ gcc -std=c99 -Wall -Wextra \
 #   tests/unit/service/test_service_proto.c
 #   tests/unit/service/test_service_chassis.c   （需要 -lm）
 #   tests/unit/service/test_service_key.c
+
+# 应用层（命令见文件头）
+#   tests/unit/app/test_app_state.c
+#   tests/unit/app/test_app_fault.c
 ```
 
 **通过标准**：退出码 0，输出 `PASS: ...`。任何一个 FAIL 都要在联调前修掉。

@@ -142,9 +142,32 @@ class AckAndReportTests(unittest.TestCase):
         self.assertEqual(arm["gripper_pos"], 850)
         self.assertEqual(arm["gripper_state"], 1)
 
+    def test_wheel_speed_round_trip(self):
+        import struct
+        raw = p.build_frame(p.Report.WHEEL_SPEED, 4,
+                            struct.pack("<4h", 100, -200, 300, -400))
+        frame = p.FrameParser().feed(raw)[0]
+        self.assertEqual(p.decode_wheel_speed(frame.payload),
+                         {"fl_mm_s": 100, "fr_mm_s": -200,
+                          "rl_mm_s": 300, "rr_mm_s": -400})
+
+    def test_pid_param_ids_are_named(self):
+        for wheel, ids in enumerate(p.PID_PARAM_IDS):
+            for gain, param_id in enumerate(ids):
+                self.assertEqual(param_id, 0x20 + wheel * 3 + gain)
+                self.assertIn(param_id, p.PARAM_NAMES)
+
+    def test_set_param_payload(self):
+        payload = p.set_param_payload(0x2B, 1500)
+        self.assertEqual(len(payload), 5)
+        self.assertEqual(payload[0], 0x2B)
+        import struct
+        self.assertEqual(struct.unpack("<i", payload[1:])[0], 1500)
+
     def test_short_report_is_rejected(self):
         self.assertIsNone(p.decode_status(b"\x01\x02"))
         self.assertIsNone(p.decode_odom(b""))
+        self.assertIsNone(p.decode_wheel_speed(b"\x00" * 7))
 
 
 if __name__ == "__main__":

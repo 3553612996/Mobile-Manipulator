@@ -28,12 +28,14 @@ from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFrame,
                                QGridLayout, QHBoxLayout, QLabel, QMainWindow,
                                QMessageBox, QPlainTextEdit, QPushButton,
-                               QStatusBar, QVBoxLayout, QWidget)
+                               QStackedWidget, QStatusBar, QVBoxLayout,
+                               QWidget)
 
 from . import protocol as p
 from .protocol import Cmd, Report, Result, describe
 from .simulator import SimulatorLink
 from .transport import BAUDRATES, DEFAULT_BAUD, SerialLink, available_ports
+from .tuning import TUNING_MAX_V, TuningPage
 from .widgets import (ACCENT, BASELINE, BORDER, CRITICAL, GOOD, INK, INK_2,
                       MUTED, PAGE, SERIES_LEFT, SERIES_RIGHT, SERIOUS,
                       SURFACE, SURFACE_2, SURFACE_3, WARNING, Card, Joystick, LinkBadge,
@@ -162,6 +164,7 @@ class HostWindow(QMainWindow):
         self.sim_mode = False
         self.enabled = False
         self.estopped = False
+        self.tuning_active = False
         self._closing = False
         self.v_target = 0
         self.w_target = 0
@@ -183,10 +186,12 @@ class HostWindow(QMainWindow):
         self.last_arm = None
         self.last_status = None
         self.last_beat = None
+        self.last_wheel_speed = None
         self.odom_at = 0.0
         self.arm_at = 0.0
         self.status_at = 0.0
         self.beat_at = 0.0
+        self.wheel_at = 0.0
 
         self._build_ui()
         self._build_shortcuts()
@@ -209,7 +214,10 @@ class HostWindow(QMainWindow):
         outer.setSpacing(0)
         outer.addWidget(self._build_topbar())
 
-        body = QVBoxLayout()
+        self.pages = QStackedWidget()
+
+        self.main_page = QWidget()
+        body = QVBoxLayout(self.main_page)
         body.setContentsMargins(16, 12, 16, 12)
         body.setSpacing(10)
 
@@ -225,7 +233,13 @@ class HostWindow(QMainWindow):
         body.addLayout(columns, 1)
 
         body.addWidget(self._build_log(), 0)
-        outer.addLayout(body, 1)
+        self.pages.addWidget(self.main_page)
+
+        self.tuning_page = TuningPage(self)
+        self.tuning_page.backRequested.connect(self._close_tuning)
+        self.pages.addWidget(self.tuning_page)
+
+        outer.addWidget(self.pages, 1)
 
         self._build_statusbar()
         self._apply_enabled_state()
@@ -273,6 +287,11 @@ class HostWindow(QMainWindow):
         self.sim_btn.setToolTip("PC 端虚拟 MCU：没有硬件时也能完整走一遍协议")
         self.sim_btn.toggled.connect(self._on_sim_toggled)
 
+        self.tuning_btn = _button("PID 调参", "ghost")
+        self.tuning_btn.setFixedWidth(84)
+        self.tuning_btn.setToolTip("四轮速度环增益与低速测试")
+        self.tuning_btn.clicked.connect(self._open_tuning)
+
         self.badge = LinkBadge()
 
         layout.addWidget(port_label)
@@ -283,6 +302,7 @@ class HostWindow(QMainWindow):
         layout.addWidget(self.connect_btn)
         layout.addSpacing(6)
         layout.addWidget(self.sim_btn)
+        layout.addWidget(self.tuning_btn)
         layout.addSpacing(8)
         layout.addWidget(self.badge)
         return bar
@@ -610,6 +630,7 @@ class HostWindow(QMainWindow):
             self._log("链路已建立", "ok")
             self._apply_enabled_state()
         else:
+            self._close_tuning()
             self._cleanup_dead_link()
             self.connected = False
             self.pending.clear()
@@ -676,6 +697,10 @@ class HostWindow(QMainWindow):
             return
         v = self.v_target if self.enabled else 0
         w = self.w_target if self.enabled else 0
+        if self.tuning_active:
+            # The tuning page is only allowed to probe at low speed, no yaw.
+            v = max(-TUNING_MAX_V, min(TUNING_MAX_V, v))
+            w = 0
         self._send(Cmd.SET_VELOCITY, p.set_velocity_payload(v, w), quiet=True)
         if (v, w) != self._last_velocity_log:
             self._last_velocity_log = (v, w)
@@ -758,6 +783,11 @@ class HostWindow(QMainWindow):
             if data:
                 self.last_beat = data
                 self.beat_at = now
+        elif cmd == Report.WHEEL_SPEED:
+            data = p.decode_wheel_speed(frame.payload)
+            if data:
+                self.last_wheel_speed = data
+                self.wheel_at = now
 
         if self.show_reports.isChecked() and now - self._last_report_log >= 0.1:
             self._last_report_log = now
@@ -803,8 +833,11 @@ class HostWindow(QMainWindow):
         elif code in (0x0202, 0x0501):
             level = "error"
         self._log(f"← REPORT_EVENT {name} t={event['timestamp_ms']} ms", level)
-        if code == 0x0501:
-            self._enter_estop("MCU 上报急停事件")
+
+        # Both FATAL codes put the firmware in ESTOP; mirror that locally so
+        # the enable button cannot send a request the MCU will reject.
+        if code in (0x0202, 0x0501):
+            self._enter_estop(f"MCU 上报 {name}")
 
     # ============================================================== safety
 
@@ -853,6 +886,7 @@ class HostWindow(QMainWindow):
         self.estop_btn.setEnabled(self.connected and not self.estopped)
         self.enable_btn.setEnabled(self.connected and not self.estopped)
         self.clear_btn.setEnabled(self.connected)
+        self.tuning_btn.setEnabled(self.connected)
 
     def _on_joystick(self, x: float, y: float) -> None:
         if not (self.connected and self.enabled and not self.estopped):
@@ -880,10 +914,39 @@ class HostWindow(QMainWindow):
         self.v_target = self.w_target = 0
         self._set_velocity_sliders(0, 0)
         self.joystick.reset()
+        if hasattr(self, "tuning_page"):
+            self.tuning_page.reset_test_speed()
         if self.connected and not self.estopped:
             self._send(Cmd.SET_VELOCITY, p.set_velocity_payload(0, 0),
                        quiet=True)
             self._log("停车：v=0、ω=0", "warn")
+
+    def _open_tuning(self) -> None:
+        if not self.connected or self.tuning_active:
+            return
+        self.stop_motion()
+        self.tuning_active = True
+        self.pages.setCurrentWidget(self.tuning_page)
+        self.tuning_page.on_enter()
+        self._log("进入 PID 调参：限速 %d mm/s，ω=0" % TUNING_MAX_V, "info")
+
+    def _close_tuning(self) -> None:
+        if not self.tuning_active:
+            return
+        self.stop_motion()
+        self.tuning_active = False
+        self.tuning_page.on_leave()
+        self.pages.setCurrentWidget(self.main_page)
+        self._log("离开 PID 调参，已停车", "info")
+
+    def request_enable(self, checked: bool) -> None:
+        """Enable/disable from the tuning page; the main button mirrors it."""
+        if not self.connected:
+            return
+        self._suppress_enable = True
+        self.enable_btn.setChecked(checked)
+        self._suppress_enable = False
+        self._on_enable_toggled(checked)
 
     def emergency_stop(self) -> None:
         if self.estopped:
@@ -902,6 +965,9 @@ class HostWindow(QMainWindow):
         self._log("已下发 ESTOP", "error")
 
     def _enter_estop(self, source: str | None) -> None:
+        if self.tuning_active:
+            self._close_tuning()
+
         already = self.estopped
         self.estopped = True
         self.enabled = False
@@ -995,7 +1061,9 @@ class HostWindow(QMainWindow):
             tile.set_value("—", sub="", tint=None)
         self.last_odom = self.last_arm = None
         self.last_status = self.last_beat = None
+        self.last_wheel_speed = None
         self.odom_at = self.arm_at = self.status_at = self.beat_at = 0.0
+        self.wheel_at = 0.0
         for row in self.joint_rows:
             row.set_actual("实际 —")
         self.gripper_row.set_actual("实际 —")

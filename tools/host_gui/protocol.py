@@ -44,6 +44,7 @@ class Report(IntEnum):
     STATUS = 0xC3
     EVENT = 0xC4
     HEARTBEAT = 0xC5
+    WHEEL_SPEED = 0xC6
 
 
 class Result(IntEnum):
@@ -99,6 +100,18 @@ PARAM_NAMES = {
     0x11: "最大线速度",
     0x12: "最大角速度",
 }
+
+# A/B/C/D = FL/FR/RL/RR. One gain id per wheel, value = gain * 1000.
+WHEEL_NAMES = ("A 左前", "B 右前", "C 左后", "D 右后")
+PID_PARAM_IDS = (
+    (0x20, 0x21, 0x22),
+    (0x23, 0x24, 0x25),
+    (0x26, 0x27, 0x28),
+    (0x29, 0x2A, 0x2B),
+)
+for _wheel, _ids in enumerate(PID_PARAM_IDS):
+    for _gain, _suffix in enumerate(("Kp", "Ki", "Kd")):
+        PARAM_NAMES[_ids[_gain]] = f"{WHEEL_NAMES[_wheel]} {_suffix}"
 
 GRIPPER_ACTION_NAMES = {0: "张开", 1: "闭合"}
 GRIPPER_STATE_NAMES = {0: "张开", 1: "夹持", 2: "夹空"}
@@ -310,6 +323,13 @@ def decode_heartbeat(payload: bytes):
     return {"state": state, "counter": counter}
 
 
+def decode_wheel_speed(payload: bytes):
+    if len(payload) != 8:
+        return None
+    fl, fr, rl, rr = struct.unpack("<4h", payload)
+    return {"fl_mm_s": fl, "fr_mm_s": fr, "rl_mm_s": rl, "rr_mm_s": rr}
+
+
 def describe(frame: Frame) -> str:
     """One-line human summary for the log pane."""
     if frame.is_ack:
@@ -356,6 +376,10 @@ def describe(frame: Frame) -> str:
         arm = decode_arm(frame.payload) or {}
         return (f"{name} joints={arm.get('angles_cdeg')} "
                 f"grip={arm.get('gripper_pos')} state={arm.get('gripper_state')}")
+    if frame.cmd == Report.WHEEL_SPEED:
+        wheel = decode_wheel_speed(frame.payload) or {}
+        return (f"{name} A={wheel.get('fl_mm_s')} B={wheel.get('fr_mm_s')} "
+                f"C={wheel.get('rl_mm_s')} D={wheel.get('rr_mm_s')} mm/s")
 
     return f"{name} seq={frame.seq} len={len(frame.payload)}"
 

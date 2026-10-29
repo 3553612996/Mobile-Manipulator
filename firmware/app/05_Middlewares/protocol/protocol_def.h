@@ -82,7 +82,8 @@ typedef enum
     PROTOCOL_REPORT_ARM = 0xC2,
     PROTOCOL_REPORT_STATUS = 0xC3,
     PROTOCOL_REPORT_EVENT = 0xC4,
-    PROTOCOL_REPORT_HEARTBEAT = 0xC5
+    PROTOCOL_REPORT_HEARTBEAT = 0xC5,
+    PROTOCOL_REPORT_WHEEL_SPEED = 0xC6
 } protocol_report_t;
 
 /* Second byte of an ACK payload. */
@@ -111,6 +112,14 @@ typedef enum
 #define PROTOCOL_LEN_REPORT_STATUS      ((uint8_t)8u)
 #define PROTOCOL_LEN_REPORT_EVENT       ((uint8_t)6u)
 #define PROTOCOL_LEN_REPORT_HEARTBEAT   ((uint8_t)3u)
+#define PROTOCOL_LEN_REPORT_WHEEL_SPEED ((uint8_t)8u)
+
+/* Wheel order in REPORT_WHEEL_SPEED and in the per-wheel PID ids. */
+#define PROTOCOL_WHEEL_FL               ((uint8_t)0u)
+#define PROTOCOL_WHEEL_FR               ((uint8_t)1u)
+#define PROTOCOL_WHEEL_RL               ((uint8_t)2u)
+#define PROTOCOL_WHEEL_RR               ((uint8_t)3u)
+#define PROTOCOL_WHEEL_COUNT            ((uint8_t)4u)
 
 /* Fault / event codes (docs/architecture/protocol.md 8). */
 #define PROTOCOL_FAULT_OVERCURRENT      ((uint16_t)0x0101u)
@@ -142,6 +151,24 @@ typedef enum
 #define PROTOCOL_PARAM_CMD_TIMEOUT      ((uint8_t)0x10u)
 #define PROTOCOL_PARAM_MAX_LINEAR       ((uint8_t)0x11u)
 #define PROTOCOL_PARAM_MAX_ANGULAR      ((uint8_t)0x12u)
+
+/*
+ * Per-wheel PID gains, value = gain * 1000. 0x20..0x2B in A/B/C/D order.
+ * 0x03..0x08 remain as left/right aliases for existing host builds:
+ * 0x03..0x05 write FL and RL, 0x06..0x08 write FR and RR.
+ */
+#define PROTOCOL_PARAM_PID_A_KP         ((uint8_t)0x20u)
+#define PROTOCOL_PARAM_PID_A_KI         ((uint8_t)0x21u)
+#define PROTOCOL_PARAM_PID_A_KD         ((uint8_t)0x22u)
+#define PROTOCOL_PARAM_PID_B_KP         ((uint8_t)0x23u)
+#define PROTOCOL_PARAM_PID_B_KI         ((uint8_t)0x24u)
+#define PROTOCOL_PARAM_PID_B_KD         ((uint8_t)0x25u)
+#define PROTOCOL_PARAM_PID_C_KP         ((uint8_t)0x26u)
+#define PROTOCOL_PARAM_PID_C_KI         ((uint8_t)0x27u)
+#define PROTOCOL_PARAM_PID_C_KD         ((uint8_t)0x28u)
+#define PROTOCOL_PARAM_PID_D_KP         ((uint8_t)0x29u)
+#define PROTOCOL_PARAM_PID_D_KI         ((uint8_t)0x2Au)
+#define PROTOCOL_PARAM_PID_D_KD         ((uint8_t)0x2Bu)
 
 //******************************** Declaring ********************************//
 
