@@ -23,7 +23,9 @@ import time
 
 from PySide6.QtCore import QObject, Signal
 
-from .protocol import (ACK_FLAG, PID_PARAM_IDS, Cmd, FrameParser, Report,
+from .protocol import (ACK_FLAG, COUNTS_PER_MM_IDS, CRASH_SLOT_COUNT,
+                       CRASH_SLOT_LATEST, DIRECTION_IDS, DUTY_FWD_IDS,
+                       DUTY_REV_IDS, PID_PARAM_IDS, Cmd, FrameParser, Report,
                        Result, build_frame)
 
 TICK_S = 0.005
@@ -36,6 +38,45 @@ HEARTBEAT_PERIOD_S = 0.100
 TRACK_WIDTH_MM = 200.0
 JOINT_RATE = 6000.0        # centi-degrees per second
 GRIPPER_RATE = 500.0       # position units per second
+
+# Storage side (protocol.md 5.5). The virtual device starts with values that
+# match the calibration page's defaults, so a write followed by a read-back
+# shows the same numbers.
+LOG_EXPORT_PERIOD_S = 0.050        # the firmware's 20 Hz ceiling
+CRASH_CHUNK_BYTES = 32
+DEFAULT_LIMITS = {"timeout_ms": 200, "max_linear": 500, "max_angular": 1500}
+DEFAULT_CALIB = {
+    "wheel_base": 240,
+    "wheel_diameter": 60,
+    "counts": [24828] * 4,
+    "duty_fwd": [75, 67, 82, 80],
+    "duty_rev": [67, 75, 80, 100],
+    "direction": [1] * 4,
+}
+LIMIT_PARAM_IDS = {0x10: "timeout_ms", 0x11: "max_linear", 0x12: "max_angular"}
+# Same bounds as firmware/app/01_APP/app_robot/app_params.c. The velocity
+# limits are capped at what the chassis can actually do (500 mm/s per wheel,
+# 1500 mrad/s), so a host cannot configure a limit that would never be reached
+# and then believe commands above the real capability were accepted.
+PARAM_RANGES = {
+    0x01: (50, 2000),        # wheel base, mm
+    0x02: (10, 500),         # wheel diameter, mm
+    0x10: (10, 5000),        # command timeout, ms
+    0x11: (10, 500),         # max linear speed, mm/s
+    0x12: (10, 1500),        # max angular speed, mrad/s
+}
+COUNTS_PER_MM_RANGE = (1000, 100000)
+
+# param id -> (calibration field, index or None)
+CALIB_FIELDS = {0x01: ("wheel_base", None), 0x02: ("wheel_diameter", None)}
+for _wheel, _param_id in enumerate(COUNTS_PER_MM_IDS):
+    CALIB_FIELDS[_param_id] = ("counts", _wheel)
+for _wheel, _param_id in enumerate(DUTY_FWD_IDS):
+    CALIB_FIELDS[_param_id] = ("duty_fwd", _wheel)
+for _wheel, _param_id in enumerate(DUTY_REV_IDS):
+    CALIB_FIELDS[_param_id] = ("duty_rev", _wheel)
+for _wheel, _param_id in enumerate(DIRECTION_IDS):
+    CALIB_FIELDS[_param_id] = ("direction", _wheel)
 
 
 class SimulatorLink(QObject):
@@ -102,13 +143,36 @@ class SimulatorLink(QObject):
         self._gripper = 0.0        # 0..1000
         self._gripper_target = 0.0
         self._gripper_state = 0
-        self._gains = [[1.0, 0.6, 0.0] for _ in range(4)]
+        self._gains = [[5.0, 6.0, 0.0] for _ in range(4)]
         self._heartbeat = 0
         self._tx_seq = 0
         self._rng = random.Random(7)
         self._out_parser = FrameParser()
         self._in_parser = FrameParser()
         self._started_at = time.monotonic()
+
+        # -- storage subsystem --------------------------------------------
+        self._param_seq = 4
+        self._calib_seq = 2
+        self._boot_total = 23
+        self._log_erase = 11
+        self._last_save_s = 0
+        self._log_level = 1
+        self._param_valid = True
+        self._calib_valid = True
+        self._dirty_param = False
+        self._dirty_calib = False
+        self._save_failed = False
+        self._crash_unread = True
+        self._log_wrapped = False
+        self._limits = dict(DEFAULT_LIMITS)
+        self._calib = {key: (list(value) if isinstance(value, list) else value)
+                       for key, value in DEFAULT_CALIB.items()}
+        self._logs = self._seed_logs()
+        self._faults = self._seed_faults()
+        self._export: dict | None = None
+        self._crash_records = [self._make_crash()]
+        self._crash_tx: dict | None = None
 
     # -- worker ------------------------------------------------------------
 
@@ -131,6 +195,8 @@ class SimulatorLink(QObject):
             self.crc_errors = self._in_parser.crc_errors
 
             self._step(dt, now)
+            self._step_export(now)
+            self._step_crash()
 
             for key, period, builder in (
                     ("odom", ODOM_PERIOD_S, self._odom_payload),
@@ -227,18 +293,32 @@ class SimulatorLink(QObject):
                 return
             param_id = payload[0]
             value = struct.unpack("<i", payload[1:])[0]
-            target = self._param_target(param_id)
-            if target is None:
-                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
-                return
-            gain, wheels = target
-            limit = 5000 if gain == 2 else 10000
-            if not 0 <= value <= limit:
-                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
-                return
-            for wheel in wheels:
-                self._gains[wheel][gain] = value / 1000.0
+            self._handle_set_param(frame, param_id, value)
+            return
+
+        if cmd == Cmd.PARAM_SAVE:
+            self._handle_param_save(frame, now)
+            return
+
+        if cmd == Cmd.PARAM_RESET:
+            self._handle_param_reset(frame)
+            return
+
+        if cmd == Cmd.STORAGE_QUERY:
             self._ack(cmd, frame.seq, Result.OK)
+            self._emit(self._storage_payload())
+            return
+
+        if cmd == Cmd.LOG_EXPORT:
+            self._handle_log_export(frame, now)
+            return
+
+        if cmd == Cmd.CRASH_READ:
+            self._handle_crash_read(frame, now)
+            return
+
+        if cmd == Cmd.LOG_CLEAR:
+            self._handle_log_clear(frame)
             return
 
         if cmd == Cmd.ESTOP:
@@ -266,6 +346,189 @@ class SimulatorLink(QObject):
 
         if 0x01 <= cmd <= 0x3F:
             self._ack(cmd, frame.seq, Result.UNKNOWN_CMD)
+
+    # -- parameters and calibration ---------------------------------------
+
+    def _handle_set_param(self, frame, param_id: int, value: int) -> None:
+        cmd = int(Cmd.SET_PARAM)
+
+        if param_id == 0x40:                       # log level
+            if not 0 <= value <= 3:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            self._log_level = value
+            self._dirty_param = True
+            self._ack(cmd, frame.seq, Result.OK)
+            return
+
+        if param_id in CALIB_FIELDS:
+            field, index = CALIB_FIELDS[param_id]
+            low, high = PARAM_RANGES.get(param_id, (0, 1000))
+            if field == "direction":
+                in_range = value in (1, -1)
+            elif field == "counts":
+                in_range = COUNTS_PER_MM_RANGE[0] <= value <= \
+                    COUNTS_PER_MM_RANGE[1]
+            else:
+                in_range = low <= value <= high
+            if not in_range:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            # Calibration may not move under a powered chassis (5.4).
+            if self._enabled:
+                self._ack(cmd, frame.seq, Result.BAD_STATE)
+                return
+            if index is None:
+                self._calib[field] = value
+            else:
+                self._calib[field][index] = value
+            self._dirty_calib = True
+            self._ack(cmd, frame.seq, Result.OK)
+            return
+
+        if param_id in LIMIT_PARAM_IDS:
+            low, high = PARAM_RANGES[param_id]
+            if not low <= value <= high:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            self._limits[LIMIT_PARAM_IDS[param_id]] = value
+            self._dirty_param = True
+            self._ack(cmd, frame.seq, Result.OK)
+            return
+
+        target = self._param_target(param_id)
+        if target is None:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+        gain, wheels = target
+        limit = 5000 if gain == 2 else 10000
+        if not 0 <= value <= limit:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+        for wheel in wheels:
+            self._gains[wheel][gain] = value / 1000.0
+        self._dirty_param = True
+        self._ack(cmd, frame.seq, Result.OK)
+
+    def _handle_param_save(self, frame, now: float) -> None:
+        cmd = int(Cmd.PARAM_SAVE)
+        payload = frame.payload
+        if len(payload) != 1 or payload[0] > 2:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+        scope = payload[0]
+        if scope in (1, 2) and self._enabled:
+            self._ack(cmd, frame.seq, Result.BAD_STATE)
+            return
+        if scope in (0, 2):
+            self._dirty_param = False
+            self._param_seq = (self._param_seq + 1) & 0xFFFF
+        if scope in (1, 2):
+            self._dirty_calib = False
+            self._calib_seq = (self._calib_seq + 1) & 0xFFFF
+        self._save_failed = False
+        self._last_save_s = int(now - self._started_at)
+        self._ack(cmd, frame.seq, Result.OK)
+        self._emit(self._storage_payload())
+
+    def _handle_param_reset(self, frame) -> None:
+        cmd = int(Cmd.PARAM_RESET)
+        payload = frame.payload
+        if len(payload) != 2 or payload[1] != 0xA5 or payload[0] > 2:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+        scope = payload[0]
+        if scope in (1, 2) and self._enabled:
+            self._ack(cmd, frame.seq, Result.BAD_STATE)
+            return
+        if scope in (0, 2):
+            self._gains = [[5.0, 6.0, 0.0] for _ in range(4)]
+            self._limits = dict(DEFAULT_LIMITS)
+            self._log_level = 1
+            self._dirty_param = True
+        if scope in (1, 2):
+            self._calib = {
+                key: (list(value) if isinstance(value, list) else value)
+                for key, value in DEFAULT_CALIB.items()}
+            self._dirty_calib = True
+        self._ack(cmd, frame.seq, Result.OK)
+
+    # -- storage reads -----------------------------------------------------
+
+    def _handle_log_export(self, frame, now: float) -> None:
+        cmd = int(Cmd.LOG_EXPORT)
+        payload = frame.payload
+        if len(payload) != 6:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+        source, action = payload[0], payload[1]
+        from_seq = struct.unpack("<I", payload[2:])[0]
+        if source > 1 or action > 1:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+
+        if not action:
+            self._export = None
+            self._ack(cmd, frame.seq, Result.OK)
+            return
+
+        if self._export is not None:
+            self._ack(cmd, frame.seq, Result.BUSY)
+            return
+
+        records = self._records_for(source)
+        index = 0
+        if from_seq:
+            index = len(records)
+            for position, record in enumerate(records):
+                if record["seq"] >= from_seq:
+                    index = position
+                    break
+        self._export = {"source": source, "index": index, "next_at": now}
+        self._ack(cmd, frame.seq, Result.OK)
+
+    def _handle_crash_read(self, frame, now: float) -> None:
+        cmd = int(Cmd.CRASH_READ)
+        payload = frame.payload
+        if len(payload) != 2:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+        slot, flags = payload[0], payload[1]
+        # Slot numbering is checked first, exactly like the firmware: 16..0xFE
+        # is a bad request (RANGE), a valid slot with no record is FAILED.
+        if slot != CRASH_SLOT_LATEST and slot >= CRASH_SLOT_COUNT:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+        if not self._crash_records:
+            self._ack(cmd, frame.seq, Result.FAILED)
+            return
+        if slot == CRASH_SLOT_LATEST:
+            slot = len(self._crash_records) - 1
+        if slot >= len(self._crash_records):
+            self._ack(cmd, frame.seq, Result.FAILED)
+            return
+        if flags & 0x01:
+            self._crash_unread = False
+        self._crash_tx = {"slot": slot, "offset": 0}
+        self._ack(cmd, frame.seq, Result.OK)
+
+    def _handle_log_clear(self, frame) -> None:
+        cmd = int(Cmd.LOG_CLEAR)
+        payload = frame.payload
+        if len(payload) != 2 or payload[1] != 0xA5 or payload[0] > 3:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+        source = payload[0]
+        if source in (0, 3):
+            self._logs = []
+        if source in (1, 3):
+            self._faults = []
+        if source in (2, 3):
+            self._crash_records = []
+            self._crash_unread = False
+            self._crash_tx = None
+        self._ack(cmd, frame.seq, Result.OK)
+        self._emit(self._storage_payload())
 
     @staticmethod
     def _param_target(param_id: int):
@@ -334,6 +597,121 @@ class SimulatorLink(QObject):
     def _event_payload(self, code: int, now: float) -> tuple[int, bytes]:
         stamp = int((now - self._started_at) * 1000.0) & 0xFFFFFFFF
         return Report.EVENT, struct.pack("<HI", code, stamp)
+
+    # -- storage reports ---------------------------------------------------
+
+    @staticmethod
+    def _seed_logs():
+        rows = (
+            (12, 1, 6, "存储子系统就绪：W25Q64 8 MiB，分区表有效"),
+            (12, 1, 1, "底盘标定载入：轮距 240 mm，编码器 24828 counts/m"),
+            (13, 1, 2, "协议 v1 链路建立，ACK 超时 200 ms"),
+            (14, 1, 5, "急停回路自检通过"),
+            (15, 1, 4, "电池电压 11.8 V，正常"),
+            (18, 2, 1, "速度环输出限幅：左前轮需求 620 mm/s，限到 500"),
+            (19, 1, 3, "关节 2 目标角 -45.0 deg"),
+            (21, 2, 2, "REPORT_WHEEL_SPEED 队列积压 2 帧，已丢弃最旧"),
+            (23, 1, 6, "日志环已用 1.6 KB，擦除 11 次"),
+            (26, 3, 1, "编码器 A 相计数抖动 3 counts，已滤波"),
+            (28, 1, 2, "收到 LOG_EXPORT，速率上限 20 Hz"),
+        )
+        return [{"seq": index + 1, "ts": ts, "level": level, "tag": tag,
+                 "text": text, "code": 0}
+                for index, (ts, level, tag, text) in enumerate(rows)]
+
+    @staticmethod
+    def _seed_faults():
+        rows = ((41, 0x0201, 2), (97, 0x0402, 2), (160, 0x0102, 3))
+        return [{"seq": index + 1, "ts": ts, "level": level, "tag": 0,
+                 "text": "", "code": code}
+                for index, (ts, code, level) in enumerate(rows)]
+
+    @staticmethod
+    def _make_crash() -> bytes:
+        header = (b"CRASH r0=0x20001234 r1=0x00000000 r2=0x0800ABCD "
+                  b"psr=0x01000000 lr=0x08004A11 pc=0x08004A2E")
+        body = bytes((index * 7 + 3) & 0xFF for index in range(1024))
+        return (header + body)[:1024]
+
+    def _records_for(self, source: int):
+        return self._faults if source == 1 else self._logs
+
+    def _log_used(self) -> int:
+        return 128 + 64 * (len(self._logs) + len(self._faults))
+
+    def _storage_payload(self) -> tuple[int, bytes]:
+        flags = 0
+        if not (self._dirty_param or self._dirty_calib):
+            flags |= 0x01
+        if self._param_valid:
+            flags |= 0x02
+        if self._calib_valid:
+            flags |= 0x04
+        if self._save_failed:
+            flags |= 0x08
+        flags |= 0x10                    # one application image, always valid
+        if self._crash_unread:
+            flags |= 0x40
+        if self._log_wrapped:
+            flags |= 0x80
+        payload = struct.pack("<BBHHHIIII", flags, self._log_level,
+                              self._param_seq, self._calib_seq, 0,
+                              self._boot_total, self._log_used(),
+                              self._log_erase, self._last_save_s)
+        return Report.STORAGE, payload
+
+    def _step_export(self, now: float) -> None:
+        if self._export is None or now < self._export["next_at"]:
+            return
+        source = self._export["source"]
+        records = self._records_for(source)
+        index = self._export["index"]
+
+        if index >= len(records):
+            self._emit(self._log_end(source, 0xFFFF))
+            self._export = None
+            return
+
+        record = records[index]
+        self._export["index"] = index + 1
+        self._export["next_at"] = now + LOG_EXPORT_PERIOD_S
+        self._emit(self._log_record(source, record))
+
+        if index + 1 >= len(records):
+            # The end frame closes the export; every record before it carries
+            # "more" (protocol.md 5.5.6).
+            self._emit(self._log_end(source, (record["seq"] + 1) & 0xFFFFFFFF))
+            self._export = None
+
+    def _log_record(self, source: int, record: dict) -> tuple[int, bytes]:
+        text = record["text"]
+        while len(text.encode("utf-8")) > 49:
+            text = text[:-1]
+        data = text.encode("utf-8")
+        head = struct.pack("<BBBBIIHB", source, record["level"],
+                           record["tag"], 0x01, record["ts"],
+                           record["seq"], record["code"], len(data))
+        return Report.LOG, head + data
+
+    @staticmethod
+    def _log_end(source: int, seq: int) -> tuple[int, bytes]:
+        head = struct.pack("<BBBBIIHB", source, 0, 0, 0x02, 0, seq, 0, 0)
+        return Report.LOG, head
+
+    def _step_crash(self) -> None:
+        if self._crash_tx is None:
+            return
+        slot = self._crash_tx["slot"]
+        data = self._crash_records[slot]
+        offset = self._crash_tx["offset"]
+        chunk = data[offset:offset + CRASH_CHUNK_BYTES]
+        more = offset + len(chunk) < len(data)
+        head = struct.pack("<BBHHB", slot, 0x01 if more else 0x00,
+                           offset, len(data), len(chunk))
+        self._emit((Report.CRASH, head + chunk))
+        self._crash_tx["offset"] = offset + len(chunk)
+        if not more:
+            self._crash_tx = None
 
     # -- outbound ----------------------------------------------------------
 

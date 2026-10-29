@@ -32,8 +32,10 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFrame,
                                QWidget)
 
 from . import protocol as p
+from .calibration import CalibrationPage
 from .protocol import Cmd, Report, Result, describe
 from .simulator import SimulatorLink
+from .storage import StoragePage
 from .transport import BAUDRATES, DEFAULT_BAUD, SerialLink, available_ports
 from .tuning import TUNING_MAX_V, TuningPage
 from .widgets import (ACCENT, BASELINE, BORDER, CRITICAL, GOOD, INK, INK_2,
@@ -100,6 +102,14 @@ QComboBox:hover {{ border-color: #464641; }}
 QComboBox::drop-down {{ border: none; width: 18px; }}
 QComboBox QAbstractItemView {{ background: {SURFACE_3}; border: 1px solid #34342f;
                                selection-background-color: #2f3a48; }}
+QSpinBox {{ background: {SURFACE_3}; border: 1px solid #34342f;
+            border-radius: 8px; padding: 3px 6px; min-height: 22px;
+            font-family: "Consolas", monospace; font-size: 11px; }}
+QSpinBox:hover {{ border-color: #464641; }}
+QSpinBox:disabled {{ color: #5c5c57; background: #1b1b1a;
+                     border-color: #262624; }}
+QSpinBox::up-button, QSpinBox::down-button {{ width: 14px; border: none;
+                                              background: transparent; }}
 QCheckBox {{ color: {INK_2}; font-size: 10px; spacing: 6px; }}
 QCheckBox::indicator {{ width: 13px; height: 13px; border-radius: 4px;
                         border: 1px solid #4a4a45; background: #1b1b1a; }}
@@ -165,6 +175,8 @@ class HostWindow(QMainWindow):
         self.enabled = False
         self.estopped = False
         self.tuning_active = False
+        self.calib_active = False
+        self.storage_active = False
         self._closing = False
         self.v_target = 0
         self.w_target = 0
@@ -187,6 +199,7 @@ class HostWindow(QMainWindow):
         self.last_status = None
         self.last_beat = None
         self.last_wheel_speed = None
+        self.last_storage = None
         self.odom_at = 0.0
         self.arm_at = 0.0
         self.status_at = 0.0
@@ -238,6 +251,14 @@ class HostWindow(QMainWindow):
         self.tuning_page = TuningPage(self)
         self.tuning_page.backRequested.connect(self._close_tuning)
         self.pages.addWidget(self.tuning_page)
+
+        self.calib_page = CalibrationPage(self)
+        self.calib_page.backRequested.connect(self._close_calibration)
+        self.pages.addWidget(self.calib_page)
+
+        self.storage_page = StoragePage(self)
+        self.storage_page.backRequested.connect(self._close_storage)
+        self.pages.addWidget(self.storage_page)
 
         outer.addWidget(self.pages, 1)
 
@@ -292,6 +313,16 @@ class HostWindow(QMainWindow):
         self.tuning_btn.setToolTip("四轮速度环增益与低速测试")
         self.tuning_btn.clicked.connect(self._open_tuning)
 
+        self.calib_btn = _button("标定", "ghost")
+        self.calib_btn.setFixedWidth(60)
+        self.calib_btn.setToolTip("几何、编码器比例、起转占空比与轮方向")
+        self.calib_btn.clicked.connect(self._open_calibration)
+
+        self.storage_btn = _button("存储器", "ghost")
+        self.storage_btn.setFixedWidth(68)
+        self.storage_btn.setToolTip("存储状态、日志导出、崩溃现场读取")
+        self.storage_btn.clicked.connect(self._open_storage)
+
         self.badge = LinkBadge()
 
         layout.addWidget(port_label)
@@ -303,6 +334,8 @@ class HostWindow(QMainWindow):
         layout.addSpacing(6)
         layout.addWidget(self.sim_btn)
         layout.addWidget(self.tuning_btn)
+        layout.addWidget(self.calib_btn)
+        layout.addWidget(self.storage_btn)
         layout.addSpacing(8)
         layout.addWidget(self.badge)
         return bar
@@ -631,8 +664,11 @@ class HostWindow(QMainWindow):
             self._apply_enabled_state()
         else:
             self._close_tuning()
+            self._close_calibration()
+            self._close_storage()
             self._cleanup_dead_link()
             self.connected = False
+            self.storage_page.on_link_lost()
             self.pending.clear()
             self.enabled = False
             self.v_target = self.w_target = 0
@@ -790,6 +826,19 @@ class HostWindow(QMainWindow):
                 self.wheel_at = now
                 if self.tuning_active:
                     self.tuning_page.add_wheel_sample(data, now)
+        elif cmd == Report.STORAGE:
+            data = p.decode_storage(frame.payload)
+            if data:
+                self.last_storage = data
+                self.storage_page.on_storage(data)
+        elif cmd == Report.LOG:
+            data = p.decode_log(frame.payload)
+            if data:
+                self.storage_page.on_log(data)
+        elif cmd == Report.CRASH:
+            data = p.decode_crash(frame.payload)
+            if data:
+                self.storage_page.on_crash(data)
 
         if self.show_reports.isChecked() and now - self._last_report_log >= 0.1:
             self._last_report_log = now
@@ -889,6 +938,8 @@ class HostWindow(QMainWindow):
         self.enable_btn.setEnabled(self.connected and not self.estopped)
         self.clear_btn.setEnabled(self.connected)
         self.tuning_btn.setEnabled(self.connected)
+        self.calib_btn.setEnabled(self.connected)
+        self.storage_btn.setEnabled(self.connected)
 
     def _on_joystick(self, x: float, y: float) -> None:
         if not (self.connected and self.enabled and not self.estopped):
@@ -940,6 +991,42 @@ class HostWindow(QMainWindow):
         self.tuning_page.on_leave()
         self.pages.setCurrentWidget(self.main_page)
         self._log("离开 PID 调参，已停车", "info")
+
+    def _open_calibration(self) -> None:
+        if not self.connected or self.calib_active:
+            return
+        self.stop_motion()
+        self._close_tuning()
+        self.calib_active = True
+        self.pages.setCurrentWidget(self.calib_page)
+        self.calib_page.on_enter()
+        self._log("进入标定页：标定区写入要求底盘失能", "info")
+
+    def _close_calibration(self) -> None:
+        if not self.calib_active:
+            return
+        self.calib_active = False
+        self.calib_page.on_leave()
+        self.pages.setCurrentWidget(self.main_page)
+        self._log("离开标定页", "info")
+
+    def _open_storage(self) -> None:
+        if not self.connected or self.storage_active:
+            return
+        self.stop_motion()
+        self._close_tuning()
+        self.storage_active = True
+        self.pages.setCurrentWidget(self.storage_page)
+        self.storage_page.on_enter()
+        self._log("进入存储器页：状态查询、日志导出、崩溃现场读取", "info")
+
+    def _close_storage(self) -> None:
+        if not self.storage_active:
+            return
+        self.storage_active = False
+        self.storage_page.on_leave()
+        self.pages.setCurrentWidget(self.main_page)
+        self._log("离开存储器页", "info")
 
     def request_enable(self, checked: bool) -> None:
         """Enable/disable from the tuning page; the main button mirrors it."""
@@ -1064,6 +1151,7 @@ class HostWindow(QMainWindow):
         self.last_odom = self.last_arm = None
         self.last_status = self.last_beat = None
         self.last_wheel_speed = None
+        self.last_storage = None
         self.odom_at = self.arm_at = self.status_at = self.beat_at = 0.0
         self.wheel_at = 0.0
         for row in self.joint_rows:

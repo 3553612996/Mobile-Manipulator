@@ -147,15 +147,34 @@ for _wheel in range(4):
     PARAM_NAMES[0x58 + _wheel] = f"{WHEEL_NAMES[_wheel]} 反向起转占空比"
     PARAM_NAMES[0x5C + _wheel] = f"{WHEEL_NAMES[_wheel]} 轮方向"
 
+# Parameter ids grouped the way the calibration page writes them.
+GEOMETRY_IDS = {"wheel_base": 0x01, "wheel_diameter": 0x02}
+LIMIT_IDS = {"timeout_ms": 0x10, "max_linear": 0x11, "max_angular": 0x12}
+COUNTS_PER_MM_IDS = (0x50, 0x51, 0x52, 0x53)
+DUTY_FWD_IDS = (0x54, 0x55, 0x56, 0x57)
+DUTY_REV_IDS = (0x58, 0x59, 0x5A, 0x5B)
+DIRECTION_IDS = (0x5C, 0x5D, 0x5E, 0x5F)
+
 # 0xC9 REPORT_LOG / 0x0B LOG_EXPORT
 LOG_SOURCE_NAMES = {0: "运行日志", 1: "故障事件"}
 LOG_LEVEL_NAMES = {0: "DEBUG", 1: "INFO", 2: "WARN", 3: "ERROR"}
+LOG_TAG_NAMES = {1: "底盘", 2: "通信", 3: "机械臂", 4: "电源", 5: "急停", 6: "存储"}
 
 # 0xC8 REPORT_STORAGE bits, in the order protocol.md lists them.
 STORAGE_FLAG_NAMES = (
     "参数已落盘", "参数区有效", "标定区有效", "保存失败",
     "镜像A有效", "镜像B有效", "有未读崩溃", "日志已回卷",
 )
+STORAGE_FLAG_FIELDS = (
+    "clean", "param_valid", "calib_valid", "save_failed",
+    "image_a_valid", "image_b_valid", "crash_unread", "log_wrapped",
+)
+
+# 0xCA REPORT_CRASH: 16 slots on flash, 0xFF asks for the newest valid one,
+# and a chunk carries at most 57 bytes of the record (protocol.md 5.5.7).
+CRASH_SLOT_COUNT = 16
+CRASH_SLOT_LATEST = 0xFF
+CRASH_CHUNK_MAX = 57
 
 GRIPPER_ACTION_NAMES = {0: "张开", 1: "闭合"}
 GRIPPER_STATE_NAMES = {0: "张开", 1: "夹持", 2: "夹空"}
@@ -327,7 +346,12 @@ def clear_fault_payload(code: int = 0xFFFF) -> bytes:
     return struct.pack("<H", int(code) & 0xFFFF)
 
 
-def param_save_payload(scope: int = 0) -> bytes:
+SCOPE_PARAM = 0
+SCOPE_CALIB = 1
+SCOPE_ALL = 2
+
+
+def param_save_payload(scope: int = SCOPE_PARAM) -> bytes:
     """scope: 0 = params, 1 = calibration, 2 = both."""
     return struct.pack("<B", int(scope) & 0xFF)
 
@@ -425,6 +449,7 @@ def decode_storage(payload: bytes):
         "log_erase_count": log_erase,
         "last_save_s": last_save_s,
         "dirty": not (flags & 0x01),
+        "clean": bool(flags & 0x01),
         "param_valid": bool(flags & 0x02),
         "calib_valid": bool(flags & 0x04),
         "save_failed": bool(flags & 0x08),
@@ -433,6 +458,12 @@ def decode_storage(payload: bytes):
         "crash_unread": bool(flags & 0x40),
         "log_wrapped": bool(flags & 0x80),
     }
+
+
+def storage_flag_states(info: dict) -> list[tuple[str, bool]]:
+    """(label, set) pairs in protocol.md bit order, for the status panel."""
+    return [(name, bool(info.get(field)))
+            for name, field in zip(STORAGE_FLAG_NAMES, STORAGE_FLAG_FIELDS)]
 
 
 def decode_log(payload: bytes):
@@ -465,6 +496,71 @@ def decode_crash(payload: bytes):
         "slot": slot, "more": bool(flags & 0x01), "offset": offset,
         "total_len": total_len, "data": data,
     }
+
+
+class CrashAssembler:
+    """Reassemble the 0xCA chunks of one crash record.
+
+    REPORT_CRASH has no end frame: the record is complete once the bytes
+    received reach total_len. A slot change, an offset gap or a partial record
+    must be thrown away rather than stitched together, because a dump with a
+    hole in it is worse than no dump at all.
+    """
+
+    MAX_RECORD_BYTES = 0xFFFF
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.slot: int | None = None
+        self.total_len = 0
+        self.chunks = 0
+        self.buffer = bytearray()
+
+    @property
+    def offset(self) -> int:
+        return len(self.buffer)
+
+    @property
+    def complete(self) -> bool:
+        return self.total_len > 0 and len(self.buffer) >= self.total_len
+
+    def feed(self, chunk: dict) -> str:
+        """Feed one decoded chunk. Returns "start", "chunk", "done", "gap"
+        or "bad"."""
+        slot = int(chunk["slot"])
+        offset = int(chunk["offset"])
+        total = int(chunk["total_len"])
+        data = bytes(chunk["data"])
+
+        if not data or total <= 0 or total > self.MAX_RECORD_BYTES:
+            return "bad"
+        if offset + len(data) > total:
+            return "bad"
+
+        if self.slot != slot:
+            self.reset()
+            self.slot = slot
+            self.total_len = total
+
+        if offset != len(self.buffer):
+            self.reset()
+            self.slot = slot
+            self.total_len = total
+            if offset != 0:
+                return "gap"
+
+        self.buffer.extend(data)
+        self.chunks += 1
+
+        if len(self.buffer) >= self.total_len:
+            del self.buffer[self.total_len:]
+            return "done"
+        return "start" if self.chunks == 1 else "chunk"
+
+    def record(self) -> bytes:
+        return bytes(self.buffer)
 
 
 def describe(frame: Frame) -> str:

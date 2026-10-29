@@ -260,6 +260,83 @@ class StorageTests(unittest.TestCase):
         self.assertIn(0x40, p.PARAM_NAMES)
         self.assertIn(0x41, p.PARAM_NAMES)
 
+    def test_calib_groups_match_the_parameter_table(self):
+        self.assertEqual(p.GEOMETRY_IDS, {"wheel_base": 0x01,
+                                          "wheel_diameter": 0x02})
+        self.assertEqual(p.COUNTS_PER_MM_IDS, (0x50, 0x51, 0x52, 0x53))
+        self.assertEqual(p.DUTY_FWD_IDS, (0x54, 0x55, 0x56, 0x57))
+        self.assertEqual(p.DUTY_REV_IDS, (0x58, 0x59, 0x5A, 0x5B))
+        self.assertEqual(p.DIRECTION_IDS, (0x5C, 0x5D, 0x5E, 0x5F))
+        # Limits are parameter-region ids, not calibration.
+        for param_id in p.LIMIT_IDS.values():
+            self.assertNotIn(param_id, p.CALIB_PARAM_IDS)
+        self.assertEqual(p.LIMIT_IDS["timeout_ms"], 0x10)
+        self.assertEqual(p.LIMIT_IDS["max_linear"], 0x11)
+        self.assertEqual(p.LIMIT_IDS["max_angular"], 0x12)
+
+    def test_storage_flag_states_follow_bit_order(self):
+        st = p.decode_storage(bytes.fromhex(
+            "09 01 07 00 03 00 00 00 2A 00 00 00 E8 03 00 00 "
+            "05 00 00 00 63 00 00 00"))
+        states = p.storage_flag_states(st)
+        self.assertEqual([name for name, _ in states],
+                         list(p.STORAGE_FLAG_NAMES))
+        self.assertEqual([on for _, on in states],
+                         [True, False, False, True, False, False, False, False])
+        self.assertTrue(st["clean"])
+        self.assertTrue(st["save_failed"])
+
+
+class CrashAssemblerTests(unittest.TestCase):
+    @staticmethod
+    def _chunk(slot, offset, total, data, more=None):
+        return {"slot": slot, "offset": offset, "total_len": total,
+                "data": bytes(data),
+                "more": (offset + len(data) < total) if more is None else more}
+
+    def test_chunks_reassemble_to_one_record(self):
+        assembler = p.CrashAssembler()
+        data = bytes(range(100))
+        self.assertEqual(assembler.feed(self._chunk(3, 0, 100, data[0:40])),
+                         "start")
+        self.assertEqual(assembler.feed(self._chunk(3, 40, 100, data[40:80])),
+                         "chunk")
+        self.assertEqual(assembler.feed(self._chunk(3, 80, 100, data[80:])),
+                         "done")
+        self.assertTrue(assembler.complete)
+        self.assertEqual(assembler.record(), data)
+
+    def test_offset_gap_throws_the_partial_away(self):
+        assembler = p.CrashAssembler()
+        self.assertEqual(assembler.feed(self._chunk(1, 0, 100, b"A" * 40)),
+                         "start")
+        # 80 arrived without 40..79: stitching would hide a hole.
+        self.assertEqual(assembler.feed(self._chunk(1, 80, 100, b"C" * 20)),
+                         "gap")
+        self.assertEqual(assembler.offset, 0)
+        self.assertFalse(assembler.complete)
+
+    def test_slot_change_starts_over(self):
+        assembler = p.CrashAssembler()
+        assembler.feed(self._chunk(2, 0, 60, b"A" * 30))
+        self.assertEqual(assembler.feed(self._chunk(4, 0, 60, b"B" * 30)),
+                         "start")
+        self.assertEqual(assembler.slot, 4)
+        self.assertEqual(assembler.record(), b"B" * 30)
+
+    def test_inconsistent_lengths_are_rejected(self):
+        assembler = p.CrashAssembler()
+        self.assertEqual(assembler.feed(self._chunk(0, 0, 10, b"")), "bad")
+        self.assertEqual(assembler.feed(self._chunk(0, 0, 0, b"abcd")), "bad")
+        self.assertEqual(assembler.feed(self._chunk(0, 8, 10, b"abcd")), "bad")
+
+    def test_reset_drops_the_buffer(self):
+        assembler = p.CrashAssembler()
+        assembler.feed(self._chunk(5, 0, 50, b"A" * 25))
+        assembler.reset()
+        self.assertEqual(assembler.offset, 0)
+        self.assertIsNone(assembler.slot)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
