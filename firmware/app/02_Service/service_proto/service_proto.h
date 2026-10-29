@@ -44,7 +44,8 @@
 
 //******************************** Defines **********************************//
 
-#define SERVICE_PROTO_MAX_HANDLERS     (8u)
+/* 7 motion/state commands + 6 storage commands + headroom. */
+#define SERVICE_PROTO_MAX_HANDLERS     (16u)
 #define SERVICE_PROTO_RX_CHUNK         (32u)
 #define SERVICE_PROTO_TX_TIMEOUT_MS    (20u)
 #define SERVICE_PROTO_DEDUPE_MS        (1000u)
@@ -134,6 +135,48 @@ platform_err_t service_proto_send_event(uint16_t event_code,
 
 platform_err_t service_proto_send_heartbeat(uint8_t state,
                                             uint16_t run_counter);
+
+/* ----------------------- Storage reports (0xC8..0xCA) ------------------ */
+
+/*
+ * REPORT_STORAGE. Sent after a STORAGE_QUERY ACK and once per finished save;
+ * never periodically. The caller fills the fields from the storage status.
+ */
+platform_err_t service_proto_send_storage(uint8_t flags,
+                                          uint8_t log_level,
+                                          uint16_t param_seq,
+                                          uint16_t calib_seq,
+                                          uint16_t reserved,
+                                          uint32_t boot_total,
+                                          uint32_t log_used,
+                                          uint32_t log_erase,
+                                          uint32_t last_save_s);
+
+/*
+ * REPORT_LOG, one exported record. text_len is clamped to
+ * PROTOCOL_REPORT_LOG_TEXT_MAX; source == PROTOCOL_LOG_SOURCE_FAULT carries
+ * the fault code in code and no text.
+ */
+platform_err_t service_proto_send_log(uint8_t source,
+                                      uint8_t level,
+                                      uint8_t tag,
+                                      uint8_t flags,
+                                      uint32_t ts_s,
+                                      uint32_t seq,
+                                      uint16_t code,
+                                      const char *text,
+                                      uint8_t text_len);
+
+/*
+ * REPORT_CRASH, one fragment. data_len is clamped to
+ * PROTOCOL_REPORT_CRASH_DATA_MAX.
+ */
+platform_err_t service_proto_send_crash(uint8_t slot,
+                                        uint8_t flags,
+                                        uint16_t offset,
+                                        uint16_t total,
+                                        const uint8_t *data,
+                                        uint8_t data_len);
 
 /* -------------------------- Link diagnostics --------------------------- */
 

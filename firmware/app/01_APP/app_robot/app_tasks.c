@@ -26,6 +26,8 @@
 #include "app_robot/app_handlers.h"
 #include "app_robot/app_fault.h"
 #include "app_robot/app_report.h"
+#include "app_robot/app_params.h"
+#include "app_robot/app_storage.h"
 #include "app_robot/app_robot_config.h"
 
 #include "service_chassis/service_chassis.h"
@@ -87,6 +89,48 @@ platform_bool_t app_tasks_post_test_duty(uint8_t wheel, int16_t duty)
                : PLATFORM_FALSE;
 }
 
+platform_bool_t app_tasks_reload_params(void)
+{
+    app_pid_param_msg_t msg;
+    platform_os_queue_t queue = app_user_init_pid_queue();
+
+    if (queue == NULL)
+    {
+        return PLATFORM_FALSE;
+    }
+
+    msg.kind = (uint8_t)APP_CTRL_MSG_PID_RELOAD;
+    msg.wheel = 0u;
+    msg.gain = 0u;
+    msg.duty = 0;
+    msg.value = 0.0f;
+
+    return PLATFORM_IS_OK(platform_os_queue_send(queue, &msg, 0u))
+               ? PLATFORM_TRUE
+               : PLATFORM_FALSE;
+}
+
+platform_bool_t app_tasks_reload_limits(void)
+{
+    app_pid_param_msg_t msg;
+    platform_os_queue_t queue = app_user_init_pid_queue();
+
+    if (queue == NULL)
+    {
+        return PLATFORM_FALSE;
+    }
+
+    msg.kind = (uint8_t)APP_CTRL_MSG_LIMITS_RELOAD;
+    msg.wheel = 0u;
+    msg.gain = 0u;
+    msg.duty = 0;
+    msg.value = 0.0f;
+
+    return PLATFORM_IS_OK(platform_os_queue_send(queue, &msg, 0u))
+               ? PLATFORM_TRUE
+               : PLATFORM_FALSE;
+}
+
 void app_tasks_request_estop(uint32_t beep_until_ms)
 {
     s_pending_estop = PLATFORM_TRUE;
@@ -120,6 +164,14 @@ static void app_tasks_drain_pid_queue(uint32_t now_ms)
         {
             (void)service_chassis_set_test_duty(msg.wheel, msg.duty, now_ms);
         }
+        else if (msg.kind == (uint8_t)APP_CTRL_MSG_PID_RELOAD)
+        {
+            app_params_apply_to_chassis();
+        }
+        else if (msg.kind == (uint8_t)APP_CTRL_MSG_LIMITS_RELOAD)
+        {
+            app_params_apply_limits_to_chassis();
+        }
         else
         {
             (void)service_chassis_set_pid_gain(
@@ -149,6 +201,13 @@ void app_tasks_comm_entry(void *argument)
 
         /* Handlers may raise a fault; poll edge conditions afterwards. */
         (void)service_proto_process(now_ms);
+
+        /* Right after dispatch: ACKs first, then the reports they announced. */
+        app_storage_pump(now_ms,
+                         (service_proto_rx_age_ms(now_ms) <
+                          APP_STORAGE_EXPORT_IDLE_MS) ? PLATFORM_TRUE
+                                                      : PLATFORM_FALSE);
+
         app_handlers_process_pending(now_ms);
         app_fault_poll(now_ms);
         app_report_tick(now_ms);

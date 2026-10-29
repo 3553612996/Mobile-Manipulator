@@ -30,6 +30,9 @@ Release/
 *.lnp
 *.htm
 *.vscode
+# Keil 链接器/反汇编中间产物：每次编译重新生成
+ExtDll.iex
+disasm.txt
 # JLink 调试器产物：每次连接都会变，属于本机状态
 JLinkLog.txt
 JLinkSettings.ini

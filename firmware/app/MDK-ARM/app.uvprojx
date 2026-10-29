@@ -1129,6 +1129,11 @@
               <FilePath>../01_APP/app_robot/app_handlers.c</FilePath>
             </File>
             <File>
+              <FileName>app_params.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_params.c</FilePath>
+            </File>
+            <File>
               <FileName>app_report.c</FileName>
               <FileType>1</FileType>
               <FilePath>../01_APP/app_robot/app_report.c</FilePath>
@@ -1142,6 +1147,11 @@
               <FileName>app_state.c</FileName>
               <FileType>1</FileType>
               <FilePath>../01_APP/app_robot/app_state.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_storage.c</FilePath>
             </File>
             <File>
               <FileName>app_tasks.c</FileName>

@@ -493,6 +493,110 @@ platform_err_t service_proto_send_heartbeat(uint8_t state,
                                     PROTOCOL_LEN_REPORT_HEARTBEAT);
 }
 
+platform_err_t service_proto_send_storage(uint8_t flags,
+                                          uint8_t log_level,
+                                          uint16_t param_seq,
+                                          uint16_t calib_seq,
+                                          uint16_t reserved,
+                                          uint32_t boot_total,
+                                          uint32_t log_used,
+                                          uint32_t log_erase,
+                                          uint32_t last_save_s)
+{
+    uint8_t payload[PROTOCOL_LEN_REPORT_STORAGE];
+
+    payload[0] = flags;
+    payload[1] = log_level;
+    protocol_put_u16(&payload[2], param_seq);
+    protocol_put_u16(&payload[4], calib_seq);
+    protocol_put_u16(&payload[6], reserved);
+    protocol_put_i32(&payload[8], (int32_t)boot_total);
+    protocol_put_i32(&payload[12], (int32_t)log_used);
+    protocol_put_i32(&payload[16], (int32_t)log_erase);
+    protocol_put_i32(&payload[20], (int32_t)last_save_s);
+
+    return service_proto_send_frame(PROTOCOL_REPORT_STORAGE, payload,
+                                    PROTOCOL_LEN_REPORT_STORAGE);
+}
+
+platform_err_t service_proto_send_log(uint8_t source,
+                                      uint8_t level,
+                                      uint8_t tag,
+                                      uint8_t flags,
+                                      uint32_t ts_s,
+                                      uint32_t seq,
+                                      uint16_t code,
+                                      const char *text,
+                                      uint8_t text_len)
+{
+    uint8_t payload[PROTOCOL_LEN_REPORT_LOG_HEADER +
+                    PROTOCOL_REPORT_LOG_TEXT_MAX];
+    uint8_t i;
+
+    if (text_len > PROTOCOL_REPORT_LOG_TEXT_MAX)
+    {
+        text_len = PROTOCOL_REPORT_LOG_TEXT_MAX;
+    }
+    if ((text == NULL) && (text_len > 0u))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    payload[0] = source;
+    payload[1] = level;
+    payload[2] = tag;
+    payload[3] = flags;
+    protocol_put_i32(&payload[4], (int32_t)ts_s);
+    protocol_put_i32(&payload[8], (int32_t)seq);
+    protocol_put_u16(&payload[12], code);
+    payload[14] = text_len;
+
+    for (i = 0u; i < text_len; i++)
+    {
+        payload[PROTOCOL_LEN_REPORT_LOG_HEADER + i] = (uint8_t)text[i];
+    }
+
+    return service_proto_send_frame(
+               PROTOCOL_REPORT_LOG, payload,
+               (uint8_t)(PROTOCOL_LEN_REPORT_LOG_HEADER + text_len));
+}
+
+platform_err_t service_proto_send_crash(uint8_t slot,
+                                        uint8_t flags,
+                                        uint16_t offset,
+                                        uint16_t total,
+                                        const uint8_t *data,
+                                        uint8_t data_len)
+{
+    uint8_t payload[PROTOCOL_LEN_REPORT_CRASH_HEADER +
+                    PROTOCOL_REPORT_CRASH_DATA_MAX];
+    uint8_t i;
+
+    if (data_len > PROTOCOL_REPORT_CRASH_DATA_MAX)
+    {
+        data_len = PROTOCOL_REPORT_CRASH_DATA_MAX;
+    }
+    if ((data == NULL) && (data_len > 0u))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    payload[0] = slot;
+    payload[1] = flags;
+    protocol_put_u16(&payload[2], offset);
+    protocol_put_u16(&payload[4], total);
+    payload[6] = data_len;
+
+    for (i = 0u; i < data_len; i++)
+    {
+        payload[PROTOCOL_LEN_REPORT_CRASH_HEADER + i] = data[i];
+    }
+
+    return service_proto_send_frame(
+               PROTOCOL_REPORT_CRASH, payload,
+               (uint8_t)(PROTOCOL_LEN_REPORT_CRASH_HEADER + data_len));
+}
+
 uint32_t service_proto_rx_age_ms(uint32_t now_ms)
 {
     if (s_proto.has_rx == PLATFORM_FALSE)

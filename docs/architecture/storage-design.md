@@ -1,6 +1,6 @@
 # 存储器驱动与服务层设计（W25Q64）
 
-> **状态：驱动、存储服务层与磨损均衡已实现并通过 L1 测试与 Keil 编译；应用层（启动任务、0x08~0x0D 命令处理、日志/崩溃导出）尚未接入。**
+> **状态：驱动、存储服务层、磨损均衡与应用接入（`appStorage` 任务、0x08~0x0D 命令、日志/崩溃导出、参数落盘）已实现，并通过 12 个 L1 测试套件与 Keil 编译；HardFault 现场写入尚未接入（见第 13 节）。**
 > 布局与协议格式的定义仍是 [flash-layout.md](flash-layout.md)，本文说明代码怎么实现它、哪些地方做了具体化。两者冲突时以本文的"差异"一节为准，并回头修正 flash-layout.md。
 
 相关文档：[Flash 布局](flash-layout.md) · [串口协议](protocol.md) · [软件结构](software-design.md) · [测试索引](../../tests/README.md)
@@ -10,8 +10,8 @@
 | 日期 | 2026-10-29 |
 | 处理器 / 编译 | STM32F103RCT6 @72 MHz，Keil ARMCC V5.06 update 7 |
 | 介质 | W25Q64JV，8 MiB，SPI2（PB12 CS / PB13 SCK / PB14 MISO / PB15 MOSI） |
-| 参与编译 | `app.axf` 0 error 0 warning，Code 43 528 B / RO 996 B / RW 568 B / ZI 24 024 B |
-| 测试 | 10 个 PC 套件全部退出码 0（见第 9 节） |
+| 参与编译 | `app.axf` 0 error 0 warning，Code 54 020 B / RO 1 324 B / RW 704 B / ZI 27 408 B |
+| 测试 | 12 个 PC 套件全部退出码 0（见第 9 节） |
 
 ---
 
@@ -28,8 +28,12 @@
 | Middleware | 磨损均衡策略 | `03_Platform/platform_middleware/platform_wearlevel.c/.h` |
 | Middleware | 通用追加式记录环 | `03_Platform/platform_middleware/platform_logstore.c/.h` |
 | Service | 分区、A/B 记录、故障/日志环、崩溃槽、启动计数、寿命统计 | `02_Service/service_storage/service_storage.c/.h` |
+| Service | `REPORT_STORAGE` / `REPORT_LOG` / `REPORT_CRASH` 组帧 | `02_Service/service_proto/service_proto.c/.h` |
+| App | Flash 单写者任务、请求/导出队列、分级暂存池 | `01_APP/app_robot/app_storage.c/.h` |
+| App | 参数与标定的 RAM 副本、默认值、字节布局、脏标记 | `01_APP/app_robot/app_params.c/.h` |
+| App | 0x08~0x0D 处理函数、故障入环、控制任务增益重载 | `app_handlers.c`、`app_fault.c`、`app_tasks.c`、`app_user_init.c` |
 | 板级装配 | 注册并初始化 Flash，失败不阻断上电 | `04_Impl/impl_board/board_init.c` |
-| 测试 | 驱动模型、中间件、服务层 | `tests/unit/bsp/`、`tests/unit/platform/`、`tests/unit/service/` |
+| 测试 | 驱动模型、中间件、服务层、应用接入 | `tests/unit/bsp/`、`tests/unit/platform/`、`tests/unit/service/`、`tests/unit/app/` |
 
 **没有移植第三方代码。** 磨损均衡在这里只是一个"候选扇区里挑擦除次数最小者"的贪心策略，公共实现（如 LittleFS 的 `lfs_alloc`、SPIFFS/FatFs 的磨损层）都比本项目所需的复杂：它们要支持文件系统语义、可挂载任意目录结构，而本项目的环是固定区域、单写者、顺序追加。重复实现约 100 行比引入一个文件系统更小、更可测，因此算法按公开的贪心理路重写，未复制代码。
 
@@ -352,7 +356,9 @@ pick_filtered(region, hint, filter):
 | `test_service_key` | 按键服务 | PASS |
 | `test_service_storage` | 存储服务：A/B、环、崩溃、启动计数、寿命统计 | 通过 |
 | `test_app_state` | 应用状态机 | PASS |
-| `test_app_fault` | 故障仲裁 | PASS |
+| `test_app_fault` | 故障仲裁（含故障入环） | PASS |
+| `test_app_params` | 参数 RAM 副本、默认值、序列化、坏 blob 拒绝 | PASS |
+| `test_app_storage` | 暂存/借用、回调、丢弃计数、导出节拍与结束帧 | PASS |
 
 驱动测试用一个 8 MiB 的内存 W25Q64 模型替代 `platform_spi_*`：它按 CS 边沿解析命令/地址，擦除置 `0xFF`，页编程按位与，状态寄存器的 BUSY 需要几次轮询才清零，并提供"JEDEC 错误"和"WEL 不锁存"两个故障注入开关。这样驱动的时间等待、错误映射和页边界逻辑都被真正执行，而不是被桩函数绕开。
 
@@ -361,11 +367,13 @@ pick_filtered(region, hint, filter):
 ### 9.2 Keil / ARMCC
 
 ```
-Program Size: Code=43528 RO-data=996 RW-data=568 ZI-data=24024
+Program Size: Code=54020 RO-data=1324 RW-data=704 ZI-data=27408
 "app\app.axf" - 0 Error(s), 0 Warning(s).
 ```
 
-存储服务与驱动目前只被 `board_init()` 引用到 Flash 注册/初始化这一条路径，应用尚未调用 `service_storage_*`，因此链接器会丢弃未被引用的服务函数；接入应用后代码量会再增加（预计 4~6 KB）。现在能确认的是：所有新文件在 ARMCC V5.06（默认 C90 语义）下编译通过，无警告。
+应用接入后，`service_storage_*` 与两条新命令路径都被引用，链接器不再丢弃它们。相比只有驱动时的 43 528 B，代码增加约 10.5 KB（服务层 6 KB 左右 + 应用任务、参数模块与 6 个处理函数 4.5 KB 左右）。ZI 增加 3 384 B，主要是暂存池 480 B、两个静态队列 464 B 与 `appStorage` 任务栈 1 024 B，另有控制任务队列消息改为 24 B 带来的少量增长。所有新文件在 ARMCC V5.06（默认 C90 语义）下编译通过，无警告。
+
+RAM 余量：48 KB 中 ZI 27.4 KB + RW 0.7 KB ≈ 28.1 KB，剩余约 20 KB 给 FreeRTOS 静态堆与中断栈，仍有余量。
 
 ---
 
@@ -373,7 +381,7 @@ Program Size: Code=43528 RO-data=996 RW-data=568 ZI-data=24024
 
 | 步骤 | 操作 | 通过标准 |
 | --- | --- | --- |
-| 1 | 上电，读 JEDEC（`STORAGE_QUERY` 接入前可用调试器或临时日志） | `EF 40 17` |
+| 1 | 上电，读 JEDEC（调试器，或发 `STORAGE_QUERY` 看是否回 `0x00` 而非 `0x06`） | `EF 40 17` |
 | 2 | 连续复位 5 次，读启动计数 | 每次 +1，复位后不丢 |
 | 3 | 保存参数 → 断电 → 上电加载 | 字节完全一致，`seq` 增加 |
 | 4 | 保存过程中拔电 ×20 | 每次上电都能读到一份有效参数或回退默认值 |
@@ -399,20 +407,87 @@ Program Size: Code=43528 RO-data=996 RW-data=568 ZI-data=24024
 
 ---
 
-## 12. 后续工作（按依赖顺序）
+## 12. 应用层接入：`appStorage` 任务
+
+### 12.1 为什么必须有一个任务
+
+一次扇区擦除要 150 ms~1 s，期间 SPI 总线被互斥锁占住；读操作同样要排队。如果通信任务直接调用 `service_storage_*`，200 ms 指令超时必然触发；控制任务被卡住则电机保持上一次占空比。所以 Flash 只能有一个所有者：`appStorage`，优先级 `PLATFORM_OS_PRIORITY_LOW`，低于通信与控制任务——存储永远不紧急。
+
+### 12.2 队列只传描述符
+
+一个静态队列槽位总共只有 512 B（`IMPL_OS_QUEUE_STORAGE_BYTES`），4 KiB 的参数区放不进消息里。做法是：
+
+| 负载大小 | 机制 | 规则 |
+| --- | --- | --- |
+| ≤ 240 B（日志、故障码、参数 60 B、标定 80 B） | 入队时复制进 2 个暂存槽之一 | 槽位由临界区保护；两个槽都占用时入队失败，调用方拿到 FALSE |
+| > 240 B | 借用调用方缓冲区 | 同一时间只允许一笔借用；第二笔被拒，调用方因此总能知道"我的缓冲区什么时候可以释放" |
+
+请求结构体 24 B（x86 上是 40 B，由 `sizeof` 决定），字段是 `kind/arg0..arg2/length/staging/payload/done/user`。回调在存储任务里、Flash 操作返回之后**恰好调用一次**；入队被拒时一次都不调用。回调里不允许阻塞，也不允许再调用本模块。
+
+### 12.3 谁来发帧
+
+存储任务只产生中立的导出记录（`app_storage_export_t`）放进第二个队列；通信任务在 `service_proto_process()` 之后调用 `app_storage_pump()`，是唯一把 `REPORT_LOG` / `REPORT_CRASH` / `REPORT_STORAGE` 写进 UART 的地方。这与"单发送者"约定一致，也保证了 ACK 先于它所预告的报告帧。
+
+### 12.4 队列满与丢弃
+
+| 事件 | 行为 | 计数 |
+| --- | --- | --- |
+| 日志行被等级过滤 | 直接丢弃 | `stats.drops` |
+| 暂存槽全忙 / 请求队列满 | 丢弃 | `stats.drops` |
+| `PARAM_SAVE` 被拒 | 返回 ACK `0x05`，任务照常运行 | — |
+| 导出队列满 | 本周期不产生下一条，下个 50 ms 再试 | — |
+| 状态帧请求 | `status_pending` 是布尔量，多次请求只发一帧 | — |
+
+日志可以丢，参数保存不能：前者是消耗品，后者是用户按了按钮的动作，必须让主机知道成功与否。
+
+### 12.5 导出的节拍与结束
+
+- 每条 `REPORT_LOG` 的 `flags` 恒带 `MORE`（bit0），导出结束时单独发一帧 `flags=0x02、text_len=0` 的结束帧。主机看到 `MORE` 一直不消失，就知道自己丢了结束帧。
+- 崩溃导出按 57 B 分片，**没有结束帧**：主机按 `offset + total` 判定完成，超时即重来。
+- 存储任务每 10 ms 醒一次，但每 50 ms 才产生一条记录（`APP_STORAGE_EXPORT_PERIOD_MS`），对应 protocol.md 的 20 Hz 上限；节拍取 10 ms 是因为它整除 50 ms，20 ms 会让实际速率漂到 16.7 Hz。
+- 主机静默 500 ms（`service_proto_rx_age_ms`）后，`app_storage_pump()` 主动停止导出；停止会同时取消运行中的日志导出与崩溃导出——对着一台已经离线的上位机继续发帧没有意义。
+
+### 12.6 0x08~0x0D 的检查次序
+
+| 命令 | 检查 | ACK 结果 |
+| --- | --- | --- |
+| `PARAM_SAVE` | Flash 可用 → 底盘状态（标定要求失能）→ 上一笔保存是否结束 | `0x06` / `0x02` / `0x05` / `0x00` |
+| `PARAM_RESET` | confirm → 底盘状态 → 保存是否在途 | `0x01` / `0x02` / `0x05` / `0x00` |
+| `STORAGE_QUERY` | Flash 可用 | `0x06` / `0x00` + 一帧 `0xC8` |
+| `LOG_EXPORT` | 参数范围 → 是否已有导出 | `0x01` / `0x05` / `0x00` |
+| `CRASH_READ` | slot 有效性（查挂载扫描缓存，不读 Flash） | `0x01` / `0x04`（无记录）/ `0x05` / `0x00` |
+| `LOG_CLEAR` | confirm → source → Flash 可用 | `0x01` / `0x06` / `0x00` |
+
+所有 ACK 只表示"受理"；真正成功与否由随后的 `REPORT_STORAGE`（bit3 = 最近一次保存失败）和 `REPORT_LOG` 结束帧表达。
+
+### 12.7 参数、标定与脏标记
+
+`app_params` 持有 RAM 副本与字节布局（版本号 2，参数 60 B，标定 80 B，全部显式小端；加载时仍接受 v1 的 56 B/28 B，见 flash-layout.md 5.3.1）。`SET_PARAM` / `PARAM_RESET` 只改 RAM 并置脏；`PARAM_SAVE` 序列化后入队，写成功的回调里 `app_params_mark_saved(scope)` 清掉对应脏位，两个 scope 都干净时才把 `REPORT_STORAGE` bit0 置 1。
+
+`PARAM_RESET` 与标定类 `SET_PARAM` 都不直接碰 `service_chassis`：它们通过控制任务队列发一条 `APP_CTRL_MSG_PID_RELOAD`，由控制任务调用 `app_params_apply_to_chassis()` 重载增益、几何、四轮比例/方向/起转占空比和限速——`service_chassis_set_pid_gain()` 会重置积分器，不能和 `apply()` 并发。限速类 `SET_PARAM`（`0x10~0x12`）允许在使能状态下写，因此走单独的 `APP_CTRL_MSG_LIMITS_RELOAD`，只调用 `app_params_apply_limits_to_chassis()`，不重置 PID 状态。标定区现在也是热更新的：写入后下一个控制节拍即生效，不需重启。
+
+### 12.8 资源
+
+| 项目 | 数量 | 说明 |
+| --- | --- | --- |
+| 任务 | 1（`appStorage`） | 栈 1 024 B，优先级 LOW |
+| 静态队列 | 2 | 请求 24 B×8，导出 ~68 B×4，均在 512 B 限制内 |
+| 暂存池 | 2×240 B | 由临界区保护 |
+| 状态 RAM | 约 200 B | 模块状态、导出迭代器、统计 |
+
+---
+
+## 13. 后续工作（按依赖顺序）
 
 | # | 事项 | 依赖 | 说明 |
 | --- | --- | --- | --- |
-| 1 | `appStorage` 任务与请求队列 | 本层 | 单写者：所有擦写从该任务发出；队列元素是"区域 + 负载"，不是指针 |
-| 2 | 协议命令 0x08~0x0D 的处理 | 1 | 当前 `s_cmd_table` 故意不含这些命令，主机收到 ACK 0x03（未知命令），与 protocol.md 一致；处理函数就绪后再注册 |
-| 3 | 参数/标定结构体序列化 | 1、2 | 应用层负责字节布局与 `layout_ver` 校验，服务层只搬运 |
-| 4 | 日志导出状态机（`REPORT_LOG` 分片） | 1、2 | 20 Hz 限速，`MORE/END` 标志 |
-| 5 | 崩溃导出（`REPORT_CRASH`） | 2 | 复用 `crash_read` 分片 |
-| 6 | HardFault 现场写入 | 4 | 受限上下文：只写一个槽，写完复位 |
-| 7 | 故障/日志的自动记录 | 1 | 故障模块只入队，不在中断里写 Flash |
-| 8 | bootloader 与 OTA | 6 | 镜像槽、引导控制块、回滚策略在 flash-layout.md 已定义，尚未实现 |
-| 9 | SPI DMA | — | 当前阻塞传输已满足 4.5 Mbit/s 与 1 s 擦除超时，DMA 是优化项 |
-| 10 | 关机前 `flush_wear` | 1 | 正常掉电流程接好后调用 |
+| 1 | HardFault 现场写入 | 12 | SPI 驱动持非递归互斥锁，不能进中断上下文；需要先做"故障时只记录到 RAM，复位后由 `appStorage` 落盘"的路径，或一个不取锁的紧急写入口 |
+| 2 | bootloader 与 OTA | — | 镜像槽、引导控制块、回滚策略在 flash-layout.md 已定义，尚未实现 |
+| 3 | `SET_PARAM` 0x41 死区总开关 | — | 每轮起转占空比（`0x54~0x5B`）已实现，写 0 即关闭；`0x41` 目前仍返回 `0x01`，要么删掉这个 id，要么把它定义为"一键清零/恢复全部起转值" |
+| 4 | SPI DMA | — | 阻塞传输已满足 4.5 Mbit/s 与擦除超时，DMA 只是留 CPU 给控制环的优化 |
+| 5 | 关机前 `flush_wear` | 12 | 掉电检测电路未定；当前按"每 16 次擦除落盘"兜底，误差有界 |
+| 6 | 日志正文的格式化入口 | 12 | 目前入环的是调用方给的定长文本；需要一个 `printf` 风格的封装，且不能在临界区里格式化 |
+| 7 | 温度/寿命告警 | 6 | 擦除计数已在 `REPORT_STORAGE` 里，主机侧可以据此提前换机 |
 
 ---
 

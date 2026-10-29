@@ -45,7 +45,7 @@ class TuningPage(QWidget):
         super().__init__(parent)
         self.host = host
         self.selected = [True, True, True, True]
-        self.gains = [[1.0, 0.6, 0.0] for _ in range(4)]
+        self.gains = [[5.0, 6.0, 0.0] for _ in range(4)]
         self._build_ui()
         self._build_timers()
 

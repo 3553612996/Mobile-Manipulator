@@ -28,11 +28,11 @@
  * SET_ARM_JOINTS and SET_VELOCITY deliberately do not require an ACK: a lost
  * joint frame is corrected by the next one and velocity has the 200 ms stop.
  *
- * The storage commands 0x08..0x0D are defined in the header (with their
- * payload sizes) but deliberately absent here until the app layer registers
- * handlers for them: a command in this table that has no handler answers
- * ACK 0x04, and protocol.md documents that the firmware answers 0x03
- * (unknown) for storage commands it does not implement yet.
+ * The storage commands 0x08..0x0D are listed here from the moment the app
+ * layer registers handlers for them; until then they were absent so the
+ * firmware answered 0x03 (unknown), as protocol.md promised. Their ACK means
+ * "accepted", not "written": the erase happens in the storage task and the
+ * outcome arrives in REPORT_STORAGE.
  */
 static const protocol_cmd_info_t s_cmd_table[] =
 {
@@ -49,7 +49,19 @@ static const protocol_cmd_info_t s_cmd_table[] =
     { PROTOCOL_CMD_ESTOP,          PROTOCOL_LEN_ESTOP,
       PLATFORM_TRUE,  "ESTOP" },
     { PROTOCOL_CMD_CLEAR_FAULT,    PROTOCOL_LEN_CLEAR_FAULT,
-      PLATFORM_TRUE,  "CLEAR_FAULT" }
+      PLATFORM_TRUE,  "CLEAR_FAULT" },
+    { PROTOCOL_CMD_PARAM_SAVE,     PROTOCOL_LEN_PARAM_SAVE,
+      PLATFORM_TRUE,  "PARAM_SAVE" },
+    { PROTOCOL_CMD_PARAM_RESET,    PROTOCOL_LEN_PARAM_RESET,
+      PLATFORM_TRUE,  "PARAM_RESET" },
+    { PROTOCOL_CMD_STORAGE_QUERY,  PROTOCOL_LEN_STORAGE_QUERY,
+      PLATFORM_TRUE,  "STORAGE_QUERY" },
+    { PROTOCOL_CMD_LOG_EXPORT,     PROTOCOL_LEN_LOG_EXPORT,
+      PLATFORM_TRUE,  "LOG_EXPORT" },
+    { PROTOCOL_CMD_CRASH_READ,     PROTOCOL_LEN_CRASH_READ,
+      PLATFORM_TRUE,  "CRASH_READ" },
+    { PROTOCOL_CMD_LOG_CLEAR,      PROTOCOL_LEN_LOG_CLEAR,
+      PLATFORM_TRUE,  "LOG_CLEAR" }
 };
 
 #define PROTOCOL_CMD_TABLE_SIZE \

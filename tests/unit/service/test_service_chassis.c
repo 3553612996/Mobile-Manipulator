@@ -417,6 +417,175 @@ static void test_open_loop_fallback(void)
     CHECK(speeds[0] == 0, "no wheel speed without feedback");
 }
 
+/* ----------------------- runtime calibration --------------------------- */
+
+/*
+ * Geometry feeds the mecanum k term. With the open-loop fallback the duty is
+ * proportional to the wheel target, so a rotate command exposes k directly:
+ * k = 270 -> 540 permille, k = 290 -> 580 permille.
+ */
+static void test_runtime_geometry(void)
+{
+    service_chassis_cfg_t cfg = make_cfg();
+
+    reset_motor_stubs();
+    cfg.counts_per_mm_x1000 = 0;
+
+    CHECK(service_chassis_init(&cfg) == PLATFORM_ERR_OK, "geometry init");
+    CHECK(service_chassis_set_geometry(0, 120) == PLATFORM_ERR_PARAM,
+          "zero half length refused");
+    CHECK(service_chassis_set_geometry(150, 1001) == PLATFORM_ERR_PARAM,
+          "geometry above the sanity bound refused");
+
+    CHECK(service_chassis_enable(PLATFORM_TRUE, 0u) == PLATFORM_ERR_OK,
+          "geometry enable");
+    (void)service_chassis_apply(0u, 10u);
+
+    CHECK(service_chassis_set_velocity(0, 0, 1000, 10u) == PLATFORM_ERR_OK,
+          "geometry rotate");
+    (void)service_chassis_apply(10u, 10u);
+    CHECK(g_duty[0] == -540, "rotate uses the startup k");
+
+    CHECK(service_chassis_set_geometry(160, 130) == PLATFORM_ERR_OK,
+          "geometry write");
+    CHECK(service_chassis_set_velocity(0, 0, 1000, 20u) == PLATFORM_ERR_OK,
+          "geometry rotate again");
+    (void)service_chassis_apply(20u, 10u);
+    CHECK(g_duty[0] == -580, "rotate uses the new k");
+    CHECK(g_duty[1] == 580, "the mirrored wheel follows");
+}
+
+/*
+ * Scale and direction change the ruler the loop and the odometry use. A
+ * mirrored motor (dir = -1) must report positive speed for a positive command,
+ * and the odometry must move the robot the other way for the same counts.
+ */
+static void test_runtime_wheel_scale(void)
+{
+    service_chassis_cfg_t cfg = make_cfg();
+    service_chassis_odometry_t odom;
+    uint8_t i;
+
+    reset_motor_stubs();
+    CHECK(service_chassis_init(&cfg) == PLATFORM_ERR_OK, "scale init");
+
+    CHECK(service_chassis_set_wheel_scale(SERVICE_CHASSIS_WHEEL_FL, 24828,
+                                          -1) == PLATFORM_ERR_OK,
+          "mirrored wheel accepted");
+    CHECK(service_chassis_set_wheel_scale(SERVICE_CHASSIS_WHEEL_FL, 24828,
+                                          0) == PLATFORM_ERR_PARAM,
+          "direction 0 refused");
+    CHECK(service_chassis_set_wheel_scale(SERVICE_CHASSIS_WHEEL_COUNT, 24828,
+                                          1) == PLATFORM_ERR_PARAM,
+          "wheel index checked");
+
+    CHECK(service_chassis_enable(PLATFORM_TRUE, 0u) == PLATFORM_ERR_OK,
+          "scale enable");
+    (void)service_chassis_apply(0u, 10u);
+    CHECK(service_chassis_set_velocity(100, 0, 0, 10u) == PLATFORM_ERR_OK,
+          "scale target");
+    (void)service_chassis_apply(10u, 10u);
+    CHECK(g_duty[0] == 200 && g_duty[1] == 200, "both loops open-loop first");
+
+    /* FL sees +25 counts, but it is mirrored, so it reads -100.7 mm/s. */
+    g_encoder[0] += 25;
+    (void)service_chassis_apply(20u, 10u);
+    CHECK((g_duty[0] >= 399) && (g_duty[0] <= 403),
+          "mirrored wheel speed has the reversed sign");
+    CHECK(g_duty[1] == 200, "the other wheels are unaffected");
+
+    /* All four mirrored: the same counts now drive the robot backwards. */
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        g_encoder[i] = TEST_COUNTS_PER_MM_X1000;
+        CHECK(service_chassis_set_wheel_scale(i, TEST_COUNTS_PER_MM_X1000,
+                                              -1) == PLATFORM_ERR_OK,
+              "odometry scale write");
+    }
+
+    service_chassis_update_odometry(1000u);
+    service_chassis_get_odometry(&odom);
+    CHECK(odom.x_mm == 0,
+          "re-baselined odometry ignores counts from before the change");
+
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        g_encoder[i] += TEST_COUNTS_PER_MM_X1000;
+    }
+
+    service_chassis_update_odometry(1000u);
+    service_chassis_get_odometry(&odom);
+    CHECK(odom.x_mm == -1000, "a mirrored wheel drives the odometry back");
+}
+
+/*
+ * Reliable start duty lifts the loop output only while the wheel is at rest.
+ * The fixture is pure P with Kp = 2: a 100 mm/s target is 200 permille.
+ */
+static void test_runtime_start_duty(void)
+{
+    service_chassis_cfg_t cfg = make_cfg();
+    uint8_t i;
+
+    reset_motor_stubs();
+    CHECK(service_chassis_init(&cfg) == PLATFORM_ERR_OK, "duty init");
+
+    CHECK(service_chassis_set_start_duty(SERVICE_CHASSIS_WHEEL_FL, 300, 250) ==
+          PLATFORM_ERR_OK, "start duty write");
+    CHECK(service_chassis_set_start_duty(SERVICE_CHASSIS_WHEEL_FL, -1, 0) ==
+          PLATFORM_ERR_PARAM, "negative start duty refused");
+    CHECK(service_chassis_set_start_duty(SERVICE_CHASSIS_WHEEL_FL, 0, 1001) ==
+          PLATFORM_ERR_PARAM, "start duty above the bound refused");
+    CHECK(service_chassis_set_start_duty(SERVICE_CHASSIS_WHEEL_COUNT, 0, 0) ==
+          PLATFORM_ERR_PARAM, "wheel index checked");
+
+    CHECK(service_chassis_enable(PLATFORM_TRUE, 0u) == PLATFORM_ERR_OK,
+          "duty enable");
+    (void)service_chassis_apply(0u, 10u);
+
+    CHECK(service_chassis_set_velocity(100, 0, 0, 10u) == PLATFORM_ERR_OK,
+          "duty target");
+    (void)service_chassis_apply(10u, 10u);
+    CHECK(g_duty[0] == 300, "forward start duty lifts the FL output");
+    for (i = 1u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        CHECK(g_duty[i] == 200, "uncalibrated wheels keep the P output");
+    }
+
+    /* The wheel turns: measured speed is about 100.7, so the floor is gone. */
+    g_encoder[0] += 25;
+    (void)service_chassis_apply(20u, 10u);
+    CHECK((g_duty[0] >= -3) && (g_duty[0] <= 0),
+          "a turning wheel may brake below the start duty");
+
+    CHECK(service_chassis_set_velocity(-100, 0, 0, 30u) == PLATFORM_ERR_OK,
+          "duty reverse target");
+    (void)service_chassis_apply(40u, 10u);
+    CHECK(g_duty[0] == -250, "reverse start duty uses its own value");
+}
+
+static void test_runtime_limits(void)
+{
+    service_chassis_cfg_t cfg = make_cfg();
+
+    reset_motor_stubs();
+    CHECK(service_chassis_init(&cfg) == PLATFORM_ERR_OK, "limits init");
+
+    CHECK(service_chassis_set_limits(0u, 500, 500, 1500) == PLATFORM_ERR_PARAM,
+          "zero timeout refused");
+    CHECK(service_chassis_set_limits(200u, 0, 500, 1500) == PLATFORM_ERR_PARAM,
+          "zero linear limit refused");
+    CHECK(service_chassis_set_limits(300u, 100, 100, 800) == PLATFORM_ERR_OK,
+          "limits write");
+
+    CHECK(service_chassis_set_velocity(150, 0, 0, 10u) == PLATFORM_ERR_PARAM,
+          "the new linear limit rejects 150 mm/s");
+    CHECK(service_chassis_set_velocity(100, 0, 0, 10u) == PLATFORM_ERR_OK,
+          "the new linear limit accepts 100 mm/s");
+    CHECK(service_chassis_set_velocity(100, 0, 900, 10u) == PLATFORM_ERR_PARAM,
+          "the new angular limit rejects 900 mrad/s");
+}
+
 /* ---------------------------- test duty -------------------------------- */
 
 static void test_test_duty(void)
@@ -533,6 +702,10 @@ int main(void)
     test_pid_gain_update();
     test_pid_reset_on_enable();
     test_open_loop_fallback();
+    test_runtime_geometry();
+    test_runtime_wheel_scale();
+    test_runtime_start_duty();
+    test_runtime_limits();
     test_test_duty();
     test_odometry();
 

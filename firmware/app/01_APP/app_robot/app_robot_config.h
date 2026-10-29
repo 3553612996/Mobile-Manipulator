@@ -55,6 +55,28 @@
  */
 #define APP_CHASSIS_COUNTS_PER_MM_X1000 ((int32_t)24828)
 
+/*
+ * Counts per wheel revolution, the constant SET_PARAM 0x02 uses when the host
+ * declares a wheel diameter: counts_per_mm = counts_per_rev / (pi * d).
+ * 13 lines * 4 (quadrature) * 90 (gearbox) = 4680. With the 60 mm tyre this
+ * reproduces APP_CHASSIS_COUNTS_PER_MM_X1000 exactly, so writing the default
+ * diameter is a no-op.
+ */
+#define APP_CHASSIS_COUNTS_PER_REV      ((int32_t)4680)
+#define APP_CHASSIS_WHEEL_DIAMETER_MM   ((int32_t)60)
+
+/*
+ * Reliable start duty (deadzone), per wheel in FL/FR/RL/RR order. Measured on
+ * the raised bench at 7.81 V on 2026-10-29, see docs/bench/pid-tuning.md 3.3:
+ * A 75/67, B 67/75, C 82/80, D 80/100 forward/reverse.
+ *
+ * These are the fallback for a blank or corrupt calibration record. A saved
+ * calibration blob wins at boot, so the values written to flash must be kept
+ * in sync with these (PARAM_SAVE scope=1).
+ */
+#define APP_CHASSIS_DEADZONE_FWD_PERMILLE   { 75, 67, 82, 80 }
+#define APP_CHASSIS_DEADZONE_REV_PERMILLE   { 67, 75, 80, 100 }
+
 /* --------------------------- Motion limits ------------------------------ */
 
 #define APP_CHASSIS_MAX_VX_MM_S         ((int16_t)500)
@@ -65,20 +87,20 @@
 #define APP_CHASSIS_MAX_WHEEL_MM_S      ((int16_t)500)
 
 /*
- * Speed-loop starting gains. These are NOT calibration results: the tyres are
- * not fitted yet and the gearbox load is unknown. They are deliberately
- * conservative so the first bench run does not oscillate. Tune on the real
- * chassis and record the values in docs/nodes/m3/test-report.md.
+ * Speed-loop gains, from the raised-bench tuning of 2026-10-29
+ * (docs/bench/pid-tuning.md 4.4, 200 mm/s, all four wheels alike). These are
+ * the fallback for a blank or corrupt parameter record; a saved blob loaded at
+ * boot wins. Keep the stored blob in sync with these (PARAM_SAVE scope=0).
  *
  * Kd stays at 0 until the encoder speed is filtered; differentiating a 10 ms
  * speed sample mostly amplifies quantization noise.
  */
-#define APP_CHASSIS_LEFT_PID_KP         ((float_t)1.0f)
-#define APP_CHASSIS_LEFT_PID_KI         ((float_t)0.6f)
+#define APP_CHASSIS_LEFT_PID_KP         ((float_t)5.0f)
+#define APP_CHASSIS_LEFT_PID_KI         ((float_t)6.0f)
 #define APP_CHASSIS_LEFT_PID_KD         ((float_t)0.0f)
 
-#define APP_CHASSIS_RIGHT_PID_KP        ((float_t)1.0f)
-#define APP_CHASSIS_RIGHT_PID_KI        ((float_t)0.6f)
+#define APP_CHASSIS_RIGHT_PID_KP        ((float_t)5.0f)
+#define APP_CHASSIS_RIGHT_PID_KI        ((float_t)6.0f)
 #define APP_CHASSIS_RIGHT_PID_KD        ((float_t)0.0f)
 
 #define APP_CHASSIS_CMD_TIMEOUT_MS      ((uint32_t)200u)
@@ -131,6 +153,47 @@
 #define APP_ARM_MIN_CENTI_DEG           ((int16_t)-9000)
 #define APP_ARM_MAX_CENTI_DEG           ((int16_t)9000)
 #define APP_ARM_MOVE_TIME_MS            ((uint16_t)800u)
+
+/* ------------------------------- Storage -------------------------------- */
+
+/*
+ * The storage task is the only writer of the external flash and the only
+ * caller of service_storage_*, so nothing outside it can block behind a
+ * 1 s sector erase.
+ */
+#define APP_STORAGE_TASK_STACK_BYTES    ((uint32_t)1024u)
+
+/*
+ * Requests are descriptors (about 24 B), never payloads: one queue slot of the
+ * static pool is 512 B for the whole queue, so eight small descriptors fit
+ * while a 4 KB blob never could.
+ */
+#define APP_STORAGE_QUEUE_LEN           ((uint32_t)8u)
+
+/* Storage task -> comm task: records ready for transmission. */
+#define APP_STORAGE_EXPORT_QUEUE_LEN    ((uint32_t)4u)
+
+/*
+ * Small records (log lines, fault events) are copied into these slots when
+ * they are queued: the caller's buffer may be a stack local that is gone long
+ * before the storage task runs. Two slots are enough because appends are
+ * event-driven; when both are busy the append is dropped and counted.
+ */
+#define APP_STORAGE_STAGING_SLOTS       ((uint32_t)2u)
+#define APP_STORAGE_STAGING_BYTES       ((uint32_t)240u)
+
+/*
+ * Idle wake-up of the storage task. It is also the quantization of the export
+ * pacing, so it must divide APP_STORAGE_EXPORT_PERIOD_MS; 10 ms keeps the
+ * export at an even 20 Hz instead of drifting to 16 Hz.
+ */
+#define APP_STORAGE_TICK_MS             ((uint32_t)10u)
+
+/* REPORT_LOG / REPORT_CRASH rate cap, protocol.md 5.5.4: 20 Hz. */
+#define APP_STORAGE_EXPORT_PERIOD_MS    ((uint32_t)50u)
+
+/* Stop an export when the host has been silent this long. */
+#define APP_STORAGE_EXPORT_IDLE_MS      ((uint32_t)500u)
 
 /* ------------------------------ Task stacks ----------------------------- */
 

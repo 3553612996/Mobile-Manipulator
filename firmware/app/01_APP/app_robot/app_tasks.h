@@ -36,7 +36,9 @@
 typedef enum
 {
     APP_CTRL_MSG_PID_GAIN = 0,
-    APP_CTRL_MSG_TEST_DUTY
+    APP_CTRL_MSG_TEST_DUTY,
+    APP_CTRL_MSG_PID_RELOAD,    /* Re-apply every stored gain (PARAM_RESET). */
+    APP_CTRL_MSG_LIMITS_RELOAD  /* Timeout/limits only; keeps the PID state. */
 } app_ctrl_msg_kind_t;
 
 typedef struct
@@ -63,6 +65,20 @@ platform_bool_t app_tasks_post_pid_param(uint8_t wheel, uint8_t gain,
  * and same failure contract as the gain setter.
  */
 platform_bool_t app_tasks_post_test_duty(uint8_t wheel, int16_t duty);
+
+/*
+ * Ask the control task to push every parameter in app_params into the chassis
+ * service. Used after PARAM_RESET; the control task owns apply(), so the
+ * reload must not run in the caller.
+ */
+platform_bool_t app_tasks_reload_params(void);
+
+/*
+ * Ask the control task to push the command timeout and velocity limits into
+ * the chassis service. Used by SET_PARAM 0x10~0x12, which the host may write
+ * while the chassis is enabled, so this reload must not touch the PID state.
+ */
+platform_bool_t app_tasks_reload_limits(void);
 
 /*
  * Ask the comm task to latch an emergency stop. Called from the control task

@@ -24,6 +24,7 @@
 #include "app_robot/app_fault.h"
 #include "app_robot/app_state.h"
 #include "app_robot/app_battery.h"
+#include "app_robot/app_storage.h"
 
 #include "service_chassis/service_chassis.h"
 #include "service_arm/service_arm.h"
@@ -134,6 +135,13 @@ platform_bool_t app_fault_raise(uint16_t code, uint32_t now_ms,
     }
 
     s_fault_code = code;
+
+    /*
+     * Persist the event before the degradation policy runs. The call only
+     * queues a descriptor; the storage task does the flash work, so this is
+     * as cheap as the EVENT frame below and cannot stall the comm task.
+     */
+    (void)app_storage_append_fault(code);
 
     if (severity == PROTOCOL_SEVERITY_FATAL)
     {

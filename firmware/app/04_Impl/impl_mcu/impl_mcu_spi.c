@@ -242,14 +242,14 @@ platform_err_t impl_spi_init(const platform_spi_cfg_t *cfg)
         s_spi.cs_pin = cfg->cs_pin;
     }
 
-    if (s_spi_lock == NULL)
-    {
-        s_spi_lock = xSemaphoreCreateMutexStatic(&s_spi_lock_buffer);
-        if (s_spi_lock == NULL)
-        {
-            return PLATFORM_ERR_NO_MEMORY;
-        }
-    }
+    /*
+     * Do not create the mutex here: init runs from board_init() before the
+     * scheduler starts, and xSemaphoreCreateMutexStatic enters a kernel
+     * critical section that (on this port) leaves BASEPRI masked until the
+     * first SVC. The flash init that follows immediately uses HAL_Delay(),
+     * which then never returns. impl_spi_lock() creates it on first use after
+     * the scheduler is running instead.
+     */
 
     s_spi.initialized = PLATFORM_TRUE;
 
@@ -442,11 +442,22 @@ platform_err_t impl_spi_lock(platform_spi_bus_t bus, uint32_t timeout_ms)
     {
         return PLATFORM_ERR_NOT_INITIALIZED;
     }
-    if ((s_spi_lock == NULL) ||
-        (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED))
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED)
     {
         /* Bring-up path in main(); nobody else can be using the bus yet. */
         return PLATFORM_ERR_OK;
+    }
+    if (s_spi_lock == NULL)
+    {
+        /*
+         * Created on the first post-scheduler use: only the storage task
+         * touches this bus, so there is no second caller to race with.
+         */
+        s_spi_lock = xSemaphoreCreateMutexStatic(&s_spi_lock_buffer);
+        if (s_spi_lock == NULL)
+        {
+            return PLATFORM_ERR_NO_MEMORY;
+        }
     }
 
     ticks = (timeout_ms == 0u) ? 0u : pdMS_TO_TICKS(timeout_ms);
