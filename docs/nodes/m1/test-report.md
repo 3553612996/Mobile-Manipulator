@@ -6,7 +6,7 @@
 | --- | --- |
 | 测试日期 | 2026-10-29 |
 | 节点 | M1 板端环境、ROS 2 工作空间 |
-| 代码 | `develop` @ `3dd785d`（`robot_interfaces` + 六个功能包骨架） |
+| 代码 | `develop` @ `d6f9afb`（`robot_interfaces` + 六个功能包骨架） |
 | 验证环境 | Windows 11 工作机；无 ROS 2、colcon、CMake |
 | 目标板 | RK3566，Ubuntu 20.04（aarch64），ROS 2 Humble（本次未接入） |
 | 测试执行 | 静态结构检查（Python 3.13） |
