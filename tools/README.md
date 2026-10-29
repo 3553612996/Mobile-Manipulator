@@ -12,6 +12,7 @@ tools/
 | 工具 | 用途 | 依赖 | 引入节点 |
 | --- | --- | --- | --- |
 | [`bench/proto_loop.py`](bench/proto_loop.py) | 串口协议闭环测试：下发 → ACK → 上报三段核对，支持静态/运动/模拟器 | `pyserial` | M2 |
+| [`bench/wheel_tune.py`](bench/wheel_tune.py) | 四轮死区扫描（开环）与速度环阶跃响应测量，输出 Markdown 表与 CSV | `pyserial` | M3 |
 | [`docgen/md2docx.py`](docgen/md2docx.py) | 把 `docs/**/*.md` 转成 `docs/word/**/*.docx`，目录结构镜像 | `python-docx` | M2 |
 | [`host_gui/`](host_gui/) | 上位机：遥测曲线、速度滑杆、急停、机械臂与夹爪 | `PySide6`、`pyserial` | M2 |
 
@@ -22,6 +23,10 @@ tools/
 python tools/bench/proto_loop.py --list
 python tools/bench/proto_loop.py --port COM7 --auto
 python tools/bench/proto_loop.py --sim --auto --move
+
+# 四轮调参（会让轮子转，必须架空并显式 --yes）
+python tools/bench/wheel_tune.py --port COM7 deadzone --yes
+python tools/bench/wheel_tune.py --port COM7 step --speed 200 --yes
 
 # 上位机（--sim 不需要硬件）
 python tools/host_gui/main.py

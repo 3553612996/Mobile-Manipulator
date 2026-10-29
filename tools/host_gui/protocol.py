@@ -45,6 +45,7 @@ class Report(IntEnum):
     EVENT = 0xC4
     HEARTBEAT = 0xC5
     WHEEL_SPEED = 0xC6
+    WHEEL_DUTY = 0xC7
 
 
 class Result(IntEnum):
@@ -112,6 +113,11 @@ PID_PARAM_IDS = (
 for _wheel, _ids in enumerate(PID_PARAM_IDS):
     for _gain, _suffix in enumerate(("Kp", "Ki", "Kd")):
         PARAM_NAMES[_ids[_gain]] = f"{WHEEL_NAMES[_wheel]} {_suffix}"
+
+# Bench-only open-loop duty, one id per wheel, value = permille [-400, 400].
+TEST_DUTY_IDS = (0x30, 0x31, 0x32, 0x33)
+for _wheel, _id in enumerate(TEST_DUTY_IDS):
+    PARAM_NAMES[_id] = f"{WHEEL_NAMES[_wheel]} 测试占空比"
 
 GRIPPER_ACTION_NAMES = {0: "张开", 1: "闭合"}
 GRIPPER_STATE_NAMES = {0: "张开", 1: "夹持", 2: "夹空"}
@@ -330,6 +336,15 @@ def decode_wheel_speed(payload: bytes):
     return {"fl_mm_s": fl, "fr_mm_s": fr, "rl_mm_s": rl, "rr_mm_s": rr}
 
 
+def decode_wheel_duty(payload: bytes):
+    """Duty the control tick last wrote, permille of full scale."""
+    if len(payload) != 8:
+        return None
+    fl, fr, rl, rr = struct.unpack("<4h", payload)
+    return {"fl_permille": fl, "fr_permille": fr,
+            "rl_permille": rl, "rr_permille": rr}
+
+
 def describe(frame: Frame) -> str:
     """One-line human summary for the log pane."""
     if frame.is_ack:
@@ -380,6 +395,10 @@ def describe(frame: Frame) -> str:
         wheel = decode_wheel_speed(frame.payload) or {}
         return (f"{name} A={wheel.get('fl_mm_s')} B={wheel.get('fr_mm_s')} "
                 f"C={wheel.get('rl_mm_s')} D={wheel.get('rr_mm_s')} mm/s")
+    if frame.cmd == Report.WHEEL_DUTY:
+        duty = decode_wheel_duty(frame.payload) or {}
+        return (f"{name} A={duty.get('fl_permille')} B={duty.get('fr_permille')} "
+                f"C={duty.get('rl_permille')} D={duty.get('rr_permille')} ‰")
 
     return f"{name} seq={frame.seq} len={len(frame.payload)}"
 

@@ -151,6 +151,22 @@ class AckAndReportTests(unittest.TestCase):
                          {"fl_mm_s": 100, "fr_mm_s": -200,
                           "rl_mm_s": 300, "rr_mm_s": -400})
 
+    def test_wheel_duty_round_trip(self):
+        import struct
+        raw = p.build_frame(p.Report.WHEEL_DUTY, 5,
+                            struct.pack("<4h", 400, -400, 0, 25))
+        frame = p.FrameParser().feed(raw)[0]
+        self.assertEqual(p.decode_wheel_duty(frame.payload),
+                         {"fl_permille": 400, "fr_permille": -400,
+                          "rl_permille": 0, "rr_permille": 25})
+
+    def test_test_duty_ids_are_named(self):
+        # 0x30..0x33 must not collide with the gain ids 0x20..0x2B.
+        self.assertEqual(p.TEST_DUTY_IDS, (0x30, 0x31, 0x32, 0x33))
+        for param_id in p.TEST_DUTY_IDS:
+            self.assertIn(param_id, p.PARAM_NAMES)
+            self.assertFalse(any(param_id in ids for ids in p.PID_PARAM_IDS))
+
     def test_pid_param_ids_are_named(self):
         for wheel, ids in enumerate(p.PID_PARAM_IDS):
             for gain, param_id in enumerate(ids):
@@ -168,6 +184,7 @@ class AckAndReportTests(unittest.TestCase):
         self.assertIsNone(p.decode_status(b"\x01\x02"))
         self.assertIsNone(p.decode_odom(b""))
         self.assertIsNone(p.decode_wheel_speed(b"\x00" * 7))
+        self.assertIsNone(p.decode_wheel_duty(b"\x00" * 9))
 
 
 if __name__ == "__main__":
