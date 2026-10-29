@@ -77,6 +77,14 @@ static void app_report_wheel_speed(void)
     (void)service_proto_send_wheel_speed(wheel_mm_s);
 }
 
+static void app_report_wheel_duty(void)
+{
+    int16_t wheel_permille[SERVICE_CHASSIS_WHEEL_COUNT];
+
+    service_chassis_get_wheel_duty(wheel_permille);
+    (void)service_proto_send_wheel_duty(wheel_permille);
+}
+
 static void app_report_arm(void)
 {
     platform_servo_states_t servo_states;
@@ -167,7 +175,14 @@ void app_report_tick(uint32_t now_ms)
     if ((now_ms - s_wheel_ms) >= APP_WHEEL_SPEED_PERIOD_MS)
     {
         s_wheel_ms = now_ms;
+
+        /*
+         * Speed and duty ride the same 20 ms deadline and are always sent as a
+         * pair: the bench tool pairs them by arrival order, and a duty that
+         * belonged to a different tick would blur the dead-zone measurement.
+         */
         app_report_wheel_speed();
+        app_report_wheel_duty();
     }
 
     if ((now_ms - s_arm_ms) >= APP_ARM_PERIOD_MS)

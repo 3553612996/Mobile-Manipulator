@@ -417,6 +417,75 @@ static void test_open_loop_fallback(void)
     CHECK(speeds[0] == 0, "no wheel speed without feedback");
 }
 
+/* ---------------------------- test duty -------------------------------- */
+
+static void test_test_duty(void)
+{
+    service_chassis_cfg_t cfg = make_cfg();
+    int16_t duty[SERVICE_CHASSIS_WHEEL_COUNT];
+
+    reset_motor_stubs();
+    (void)service_chassis_init(&cfg);
+
+    /* Refused until the bridges are on: a duty with nowhere to go would look
+       like an encoder fault on the bench. */
+    CHECK(service_chassis_set_test_duty(SERVICE_CHASSIS_WHEEL_FL, 100, 0u) ==
+          PLATFORM_ERR_FAIL, "test duty needs enable");
+    CHECK(service_chassis_is_test_mode() == PLATFORM_FALSE, "not in test mode");
+
+    CHECK(service_chassis_enable(PLATFORM_TRUE, 0u) == PLATFORM_ERR_OK,
+          "test enable");
+    CHECK(service_chassis_set_test_duty(SERVICE_CHASSIS_WHEEL_COUNT, 100, 0u) ==
+          PLATFORM_ERR_PARAM, "wheel out of range");
+    CHECK(service_chassis_set_test_duty(SERVICE_CHASSIS_WHEEL_FL,
+                                        SERVICE_CHASSIS_TEST_DUTY_MAX + 1, 0u) ==
+          PLATFORM_ERR_PARAM, "cap enforced, not clamped");
+    CHECK(service_chassis_set_test_duty(SERVICE_CHASSIS_WHEEL_FL, 150, 1000u) ==
+          PLATFORM_ERR_OK, "test duty accepted");
+    CHECK(service_chassis_is_test_mode() == PLATFORM_TRUE, "test mode entered");
+
+    /* Only the commanded wheel moves; the other three are explicitly zero. */
+    (void)service_chassis_apply(1010u, 10u);
+    CHECK(g_duty[0] == 150 && g_duty[1] == 0 && g_duty[2] == 0 &&
+          g_duty[3] == 0, "only the test wheel is driven");
+
+    service_chassis_get_wheel_duty(duty);
+    CHECK(duty[0] == 150 && duty[1] == 0, "duty is readable back");
+
+    /* Refreshing keeps it going past the original expiry. */
+    CHECK(service_chassis_set_test_duty(SERVICE_CHASSIS_WHEEL_FL, 150, 1200u) ==
+          PLATFORM_ERR_OK, "test duty refresh");
+    (void)service_chassis_apply(1290u, 10u);
+    CHECK(g_duty[0] == 150, "refresh holds the duty");
+
+    /* No refresh for > 300 ms: the wheel coasts and test mode ends by itself. */
+    (void)service_chassis_apply(1600u, 10u);
+    CHECK(g_duty[0] == 0 && g_duty[1] == 0 && g_duty[2] == 0 &&
+          g_duty[3] == 0, "stale test duty coasts");
+    CHECK(service_chassis_is_test_mode() == PLATFORM_FALSE,
+          "all wheels stale ends test mode");
+
+    /* A velocity command exits test mode at once. */
+    CHECK(service_chassis_set_test_duty(SERVICE_CHASSIS_WHEEL_FR, -200, 1700u) ==
+          PLATFORM_ERR_OK, "negative test duty");
+    (void)service_chassis_apply(1710u, 10u);
+    CHECK(g_duty[1] == -200, "reverse test duty");
+    CHECK(service_chassis_set_velocity(200, 0, 0, 1720u) == PLATFORM_ERR_OK,
+          "velocity after test");
+    CHECK(service_chassis_is_test_mode() == PLATFORM_FALSE,
+          "velocity leaves test mode");
+    (void)service_chassis_apply(1730u, 10u);
+    CHECK(g_duty[1] == 400, "PID owns the wheel again");
+
+    /* Disabling also leaves test mode. */
+    CHECK(service_chassis_set_test_duty(SERVICE_CHASSIS_WHEEL_RR, 100, 1740u) ==
+          PLATFORM_ERR_OK, "test duty before disable");
+    CHECK(service_chassis_enable(PLATFORM_FALSE, 1750u) == PLATFORM_ERR_OK,
+          "test disable");
+    CHECK(service_chassis_is_test_mode() == PLATFORM_FALSE,
+          "disable leaves test mode");
+}
+
 /* ------------------------------ odometry ------------------------------- */
 
 static void test_odometry(void)
@@ -464,6 +533,7 @@ int main(void)
     test_pid_gain_update();
     test_pid_reset_on_enable();
     test_open_loop_fallback();
+    test_test_duty();
     test_odometry();
 
     if (g_failed != 0)

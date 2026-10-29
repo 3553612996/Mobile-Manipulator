@@ -91,10 +91,22 @@ static struct
     platform_pid_t              pid[SERVICE_CHASSIS_WHEEL_COUNT];
     int32_t                     pid_prev_counts[SERVICE_CHASSIS_WHEEL_COUNT];
     int16_t                     measured_wheel_mm_s[SERVICE_CHASSIS_WHEEL_COUNT];
+    int16_t                     applied_duty[SERVICE_CHASSIS_WHEEL_COUNT];
     platform_bool_t             closed_loop;
     platform_bool_t             pid_was_enabled;
     platform_bool_t             pid_was_estopped;
     platform_bool_t             pid_was_timed_out;
+
+    /*
+     * Bench open-loop test. test_active is the switch; the per-wheel values
+     * and timestamps are written by the comm task (through the control task's
+     * queue) and consumed by apply(). apply() notices the switch transition
+     * and resets the loops, so the PID state is never touched off-thread.
+     */
+    platform_bool_t             test_active;
+    platform_bool_t             pid_was_test_active;
+    int16_t                     test_duty[SERVICE_CHASSIS_WHEEL_COUNT];
+    uint32_t                    test_duty_ms[SERVICE_CHASSIS_WHEEL_COUNT];
 
     int32_t                     x_mm;
     int32_t                     y_mm;
@@ -185,6 +197,48 @@ static void service_chassis_reset_pid_state(void)
         s_chassis.pid_prev_counts[i] = 0;
         (void)platform_motor_get_encoder(s_chassis.cfg.motor[i],
                                          &s_chassis.pid_prev_counts[i]);
+    }
+}
+
+/*
+ * Sample one encoder and turn the count step into mm/s. Returns the float
+ * speed the loop uses; the rounded value goes out in REPORT_WHEEL_SPEED.
+ * counts_per_mm_x1000 is read from the config, so the caller must be in a
+ * closed-loop build (open-loop builds have no scale).
+ */
+static float_t service_chassis_speed_mm_s(uint8_t wheel, float_t dt_s,
+                                          float_t counts_to_mm)
+{
+    int32_t now_counts = s_chassis.pid_prev_counts[wheel];
+    int32_t delta_counts;
+    float_t measured_mm_s;
+
+    /*
+     * A failed read contributes no motion rather than a fresh baseline,
+     * matching the odometry path.
+     */
+    (void)platform_motor_get_encoder(s_chassis.cfg.motor[wheel],
+                                     &now_counts);
+
+    delta_counts = (int32_t)((uint32_t)now_counts -
+                             (uint32_t)s_chassis.pid_prev_counts[wheel]);
+    s_chassis.pid_prev_counts[wheel] = now_counts;
+
+    measured_mm_s = ((float_t)delta_counts * counts_to_mm) / dt_s;
+    s_chassis.measured_wheel_mm_s[wheel] =
+        service_chassis_clamp_i16(service_chassis_round(measured_mm_s));
+
+    return measured_mm_s;
+}
+
+static void service_chassis_zero_duties(void)
+{
+    uint8_t i;
+
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        s_chassis.applied_duty[i] = 0;
+        (void)platform_motor_set_duty(s_chassis.cfg.motor[i], 0);
     }
 }
 
@@ -288,6 +342,15 @@ platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg)
     s_chassis.pid_was_enabled = PLATFORM_FALSE;
     s_chassis.pid_was_estopped = PLATFORM_FALSE;
     s_chassis.pid_was_timed_out = PLATFORM_FALSE;
+    s_chassis.test_active = PLATFORM_FALSE;
+    s_chassis.pid_was_test_active = PLATFORM_FALSE;
+
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        s_chassis.applied_duty[i] = 0;
+        s_chassis.test_duty[i] = 0;
+        s_chassis.test_duty_ms[i] = 0u;
+    }
 
     /*
      * The PID output is the signed duty itself, so its limits are the motor
@@ -478,6 +541,7 @@ platform_err_t service_chassis_enable(platform_bool_t enable,
     else
     {
         s_chassis.enabled = PLATFORM_FALSE;
+        s_chassis.test_active = PLATFORM_FALSE;
         s_chassis.target_vx_mm_s = 0;
         s_chassis.target_vy_mm_s = 0;
         s_chassis.target_wz_mrad_s = 0;
@@ -485,6 +549,7 @@ platform_err_t service_chassis_enable(platform_bool_t enable,
         /* Zero the compare first, then let the bridge coast. */
         (void)platform_motor_stop_all();
         service_chassis_set_bridges(PLATFORM_FALSE);
+        service_chassis_zero_duties();
     }
 
     return PLATFORM_ERR_OK;
@@ -531,6 +596,9 @@ platform_err_t service_chassis_set_velocity(int16_t vx_mm_s,
      */
     s_chassis.last_cmd_ms = now_ms;
     s_chassis.timed_out = PLATFORM_FALSE;
+
+    /* Normal velocity control always wins over a bench open-loop test. */
+    s_chassis.test_active = PLATFORM_FALSE;
 
     if ((s_chassis.enabled == PLATFORM_TRUE) &&
         (s_chassis.estop == PLATFORM_FALSE))
@@ -582,6 +650,7 @@ platform_err_t service_chassis_rotate(int16_t wz_mrad_s, uint32_t now_ms)
 
 void service_chassis_stop(void)
 {
+    s_chassis.test_active = PLATFORM_FALSE;
     s_chassis.target_vx_mm_s = 0;
     s_chassis.target_vy_mm_s = 0;
     s_chassis.target_wz_mrad_s = 0;
@@ -591,6 +660,7 @@ void service_chassis_emergency_stop(void)
 {
     s_chassis.estop = PLATFORM_TRUE;
     s_chassis.enabled = PLATFORM_FALSE;
+    s_chassis.test_active = PLATFORM_FALSE;
     s_chassis.timed_out = PLATFORM_FALSE;
     s_chassis.target_vx_mm_s = 0;
     s_chassis.target_vy_mm_s = 0;
@@ -598,6 +668,7 @@ void service_chassis_emergency_stop(void)
 
     (void)platform_motor_stop_all();
     service_chassis_set_bridges(PLATFORM_FALSE);
+    service_chassis_zero_duties();
 }
 
 platform_err_t service_chassis_clear_estop(void)
@@ -643,10 +714,12 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
      * communication task and would race with a multi-byte float update.
      */
     if ((s_chassis.enabled != s_chassis.pid_was_enabled) ||
-        (s_chassis.estop != s_chassis.pid_was_estopped))
+        (s_chassis.estop != s_chassis.pid_was_estopped) ||
+        (s_chassis.test_active != s_chassis.pid_was_test_active))
     {
         s_chassis.pid_was_enabled = s_chassis.enabled;
         s_chassis.pid_was_estopped = s_chassis.estop;
+        s_chassis.pid_was_test_active = s_chassis.test_active;
         service_chassis_reset_pid_state();
     }
 
@@ -658,6 +731,65 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
         return PLATFORM_FALSE;
     }
 
+    if (dt_ms == 0u)
+    {
+        dt_ms = 1u;
+    }
+
+    /*
+     * Bench open loop. The command watchdog does not apply here: the test
+     * duty carries its own per-wheel expiry, so a crashed host coasts the
+     * wheels within SERVICE_CHASSIS_TEST_DUTY_TIMEOUT_MS.
+     */
+    if (s_chassis.test_active == PLATFORM_TRUE)
+    {
+        platform_bool_t all_stale = PLATFORM_TRUE;
+
+        s_chassis.timed_out = PLATFORM_FALSE;
+        s_chassis.pid_was_timed_out = PLATFORM_FALSE;
+
+        if (s_chassis.closed_loop == PLATFORM_TRUE)
+        {
+            dt_s = (float_t)dt_ms / 1000.0f;
+            counts_to_mm =
+                1000.0f / (float_t)s_chassis.cfg.counts_per_mm_x1000;
+        }
+        else
+        {
+            dt_s = 0.0f;
+            counts_to_mm = 0.0f;
+        }
+
+        for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+        {
+            int16_t duty = 0;
+
+            /* Speed feedback is what the dead-zone sweep keys on. */
+            if (s_chassis.closed_loop == PLATFORM_TRUE)
+            {
+                (void)service_chassis_speed_mm_s(i, dt_s, counts_to_mm);
+            }
+
+            if ((now_ms - s_chassis.test_duty_ms[i]) <=
+                SERVICE_CHASSIS_TEST_DUTY_TIMEOUT_MS)
+            {
+                duty = s_chassis.test_duty[i];
+                all_stale = PLATFORM_FALSE;
+            }
+
+            s_chassis.applied_duty[i] = duty;
+            (void)platform_motor_set_duty(s_chassis.cfg.motor[i], duty);
+        }
+
+        if (all_stale == PLATFORM_TRUE)
+        {
+            /* Every wheel expired: hand the motors back to the velocity loop. */
+            s_chassis.test_active = PLATFORM_FALSE;
+        }
+
+        return PLATFORM_FALSE;
+    }
+
     /*
      * The loops were frozen during a timeout. A valid frame has cleared the
      * flag since the last tick, so restart from a fresh encoder baseline;
@@ -666,10 +798,7 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
      */
     if (s_chassis.timed_out == PLATFORM_TRUE)
     {
-        for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
-        {
-            (void)platform_motor_set_duty(s_chassis.cfg.motor[i], 0);
-        }
+        service_chassis_zero_duties();
 
         return PLATFORM_FALSE;
     }
@@ -707,10 +836,7 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
 
         s_chassis.pid_was_timed_out = PLATFORM_TRUE;
 
-        for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
-        {
-            (void)platform_motor_set_duty(s_chassis.cfg.motor[i], 0);
-        }
+        service_chassis_zero_duties();
 
         return timed_out_now;
     }
@@ -722,11 +848,6 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
                                                  s_chassis.cfg.half_width_mm),
                                        wheel_target);
 
-    if (dt_ms == 0u)
-    {
-        dt_ms = 1u;
-    }
-
     if (s_chassis.closed_loop == PLATFORM_TRUE)
     {
         dt_s = (float_t)dt_ms / 1000.0f;
@@ -734,26 +855,11 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
 
         for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
         {
-            int32_t now_counts = s_chassis.pid_prev_counts[i];
-            int32_t delta_counts;
             float_t measured_mm_s;
             float_t duty;
             int16_t target_mm_s;
 
-            /*
-             * A failed read contributes no motion rather than a fresh
-             * baseline, matching the odometry path.
-             */
-            (void)platform_motor_get_encoder(s_chassis.cfg.motor[i],
-                                             &now_counts);
-
-            delta_counts = (int32_t)((uint32_t)now_counts -
-                                     (uint32_t)s_chassis.pid_prev_counts[i]);
-            s_chassis.pid_prev_counts[i] = now_counts;
-
-            measured_mm_s = ((float_t)delta_counts * counts_to_mm) / dt_s;
-            s_chassis.measured_wheel_mm_s[i] =
-                service_chassis_clamp_i16(service_chassis_round(measured_mm_s));
+            measured_mm_s = service_chassis_speed_mm_s(i, dt_s, counts_to_mm);
 
             target_mm_s = service_chassis_clamp_speed(
                               (int32_t)wheel_target[i],
@@ -778,9 +884,9 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
                                            dt_s);
             }
 
-            (void)platform_motor_set_duty(
-                        s_chassis.cfg.motor[i],
-                        service_chassis_pid_duty(duty));
+            s_chassis.applied_duty[i] = service_chassis_pid_duty(duty);
+            (void)platform_motor_set_duty(s_chassis.cfg.motor[i],
+                                          s_chassis.applied_duty[i]);
         }
     }
     else
@@ -788,11 +894,13 @@ platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
         /* No usable encoder scale: keep the old open-loop mapping. */
         for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
         {
+            int16_t duty;
+
             s_chassis.measured_wheel_mm_s[i] = 0;
-            (void)platform_motor_set_duty(
-                        s_chassis.cfg.motor[i],
-                        service_chassis_duty(wheel_target[i],
-                                             s_chassis.cfg.max_wheel_mm_s));
+            duty = service_chassis_duty(wheel_target[i],
+                                        s_chassis.cfg.max_wheel_mm_s);
+            s_chassis.applied_duty[i] = duty;
+            (void)platform_motor_set_duty(s_chassis.cfg.motor[i], duty);
         }
     }
 
@@ -925,6 +1033,83 @@ void service_chassis_get_wheel_speeds(
     {
         out_mm_s[i] = s_chassis.measured_wheel_mm_s[i];
     }
+}
+
+void service_chassis_get_wheel_duty(
+                    int16_t out_permille[SERVICE_CHASSIS_WHEEL_COUNT])
+{
+    uint8_t i;
+
+    if (out_permille == NULL)
+    {
+        return;
+    }
+
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        out_permille[i] = s_chassis.applied_duty[i];
+    }
+}
+
+platform_err_t service_chassis_set_test_duty(uint8_t wheel,
+                                             int16_t permille,
+                                             uint32_t now_ms)
+{
+    if ((s_chassis.initialized == PLATFORM_FALSE) ||
+        (wheel >= SERVICE_CHASSIS_WHEEL_COUNT))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    if ((permille > SERVICE_CHASSIS_TEST_DUTY_MAX) ||
+        (permille < -SERVICE_CHASSIS_TEST_DUTY_MAX))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    /*
+     * The bridges must be enabled or the duty has nowhere to go. Refusing
+     * here keeps "test mode is active but nothing moves" from looking like an
+     * encoder fault on the bench.
+     */
+    if ((s_chassis.enabled == PLATFORM_FALSE) ||
+        (s_chassis.estop == PLATFORM_TRUE))
+    {
+        return PLATFORM_ERR_FAIL;
+    }
+
+    if (s_chassis.test_active == PLATFORM_FALSE)
+    {
+        uint8_t i;
+
+        /* Entering test mode: drop any pending velocity target. */
+        s_chassis.target_vx_mm_s = 0;
+        s_chassis.target_vy_mm_s = 0;
+        s_chassis.target_wz_mrad_s = 0;
+
+        /*
+         * A duty left over from an earlier test session is still inside its
+         * expiry window for up to 300 ms. Clear all four so only the wheel the
+         * host just wrote can move.
+         */
+        for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+        {
+            s_chassis.test_duty[i] = 0;
+            s_chassis.test_duty_ms[i] = now_ms;
+        }
+
+        s_chassis.test_active = PLATFORM_TRUE;
+    }
+
+    s_chassis.test_duty[wheel] = permille;
+    s_chassis.test_duty_ms[wheel] = now_ms;
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_bool_t service_chassis_is_test_mode(void)
+{
+    return s_chassis.test_active;
 }
 
 platform_bool_t service_chassis_cmd_timed_out(void)

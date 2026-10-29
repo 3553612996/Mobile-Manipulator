@@ -7,9 +7,9 @@
 | 服务 | 职责 | 关键接口 |
 | --- | --- | --- |
 | `service_key` | 按键去抖之上的短按/长按策略 | `service_key_init/update`，回调 `(id, event)` |
-| `service_chassis` | 麦轮逆运动学、四轮速度 PID、200 ms 指令超时、使能/急停、里程计 | `forward/backward/strafe/rotate/set_velocity/stop/emergency_stop`、`set_pid_gain/get_pid_gain`、`get_wheel_speeds` |
+| `service_chassis` | 麦轮逆运动学、四轮速度 PID、200 ms 指令超时、使能/急停、里程计、台架开环占空比 | `forward/backward/strafe/rotate/set_velocity/stop/emergency_stop`、`set_pid_gain/get_pid_gain`、`get_wheel_speeds/get_wheel_duty`、`set_test_duty/is_test_mode` |
 | `service_arm` | 六轴限位校验、目标跟踪、移动到舵机总线 | `set_joints/get_targets/get_states` |
-| `service_proto` | 串口协议实现：取字节、解帧、分发、ACK、SEQ 去重、上报组帧 | `process/register/send_*`，含 `send_wheel_speed` |
+| `service_proto` | 串口协议实现：取字节、解帧、分发、ACK、SEQ 去重、上报组帧 | `process/register/send_*`，含 `send_wheel_speed`、`send_wheel_duty` |
 
 ## 为什么这些属于 service 而不是 app
 
@@ -93,6 +93,18 @@ PID 本体在 `03_Platform/platform_middleware/platform_pid`，服务只负责�
 - 目标为 0 且实测速度已低于 5 mm/s 时清积分、输出 0。否则刹车过程中积累的负积分会在停车后继续给反向占空比，轮子出现低速蠕动；5 mm/s 低于 10 ms 内一个编码器计数对应的约 4 mm/s，不会误判正常运动。
 
 四轮实测速度由 `service_chassis_get_wheel_speeds()` 暴露（FL/FR/RL/RR，mm/s），APP 以 `REPORT_WHEEL_SPEED`（`0xC6`）20 ms 上报，供上位机调参页面显示闭环效果；开环回退时全为零。
+
+### 台架开环测试
+
+量电机死区需要绕过速度环：只要速度环在，PID 就会自动补掉死区，量到的永远不是电机特性。`service_chassis_set_test_duty(wheel, permille, now_ms)` 就是这个旁路：
+
+- 只在控制任务调用（它拥有 PID 状态），调用时底盘必须已使能且未急停，否则返回错误；
+- `|permille| ≤ 400`，超过直接拒绝而不是截断；
+- 每个轮子单独计时，300 ms 没刷新就按 0；
+- 进入测试模式先清空速度目标和四轮测试占空比，保证只有被写入的那一轮会转；
+- 任何速度指令、`stop()`、失能、急停都退出测试模式；测试期间 200 ms 指令超时不生效（它有自己更短的过期）。
+
+`service_chassis_get_wheel_duty()` 返回每个轮子上一个控制周期实际写入的占空比，APP 以 `REPORT_WHEEL_DUTY`（`0xC7`）与轮速同拍上报。没有这个回读，主机只能假设"我发了多少固件就写了多少"，限幅或拒绝会被误判成"电机不转"。
 
 ## PC 单测
 

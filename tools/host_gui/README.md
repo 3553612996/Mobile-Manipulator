@@ -55,8 +55,8 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 | 方向 | 内容 |
 |------|------|
 | 下行 | `SET_VELOCITY` 50 Hz、`SET_ARM_JOINTS`、`SET_GRIPPER`（ACK）、`SET_ENABLE`（ACK）、`SET_PARAM` PID 增益（ACK）、`ESTOP`（ACK）、`CLEAR_FAULT`（ACK） |
-| 上行 | `REPORT_ODOM` 50 Hz、`REPORT_WHEEL_SPEED` 50 Hz、`REPORT_ARM` 20 Hz、`REPORT_STATUS` 10 Hz、`REPORT_EVENT`、`HEARTBEAT` 10 Hz、所有 ACK |
-| 未接入界面 | `SET_PARAM` 的非 PID 参数（`0x01`/`0x02`/`0x10~0x12`），固件尚未实现 |
+| 上行 | `REPORT_ODOM` 50 Hz、`REPORT_WHEEL_SPEED` 50 Hz、`REPORT_WHEEL_DUTY` 50 Hz、`REPORT_ARM` 20 Hz、`REPORT_STATUS` 10 Hz、`REPORT_EVENT`、`HEARTBEAT` 10 Hz、所有 ACK |
+| 未接入界面 | `SET_PARAM` 的非 PID 参数（`0x01`/`0x02`/`0x10~0x12`），固件尚未实现；台架测试占空比 `0x30~0x33` 只在 `tools/bench/wheel_tune.py` 里用 |
 
 时序：ACK 超时 200 ms、最多重试 3 次；解析器在 50 ms 无字节后复位（协议 §9）。
 `LEN` 下限取 2 而不是 3 —— ESTOP 就是 7 字节空负载帧。
@@ -77,9 +77,9 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 python tools/host_gui/test_protocol.py
 ```
 
-20 个用例，覆盖 CRC-16/CCITT-FALSE、协议 §10 的三条测试向量、CRC 错误后的重同步、
+22 个用例，覆盖 CRC-16/CCITT-FALSE、协议 §10 的三条测试向量、CRC 错误后的重同步、
 非法 `LEN`（含 `0xAA` 字节引起的假帧头）、随机分片、半帧复位、ACK 字段、上报结构、
-轮速上报与 PID 参数 ID 完整性。
+轮速与占空比上报、PID 参数与测试占空比 ID 完整性。
 
 ## 已知缺口
 

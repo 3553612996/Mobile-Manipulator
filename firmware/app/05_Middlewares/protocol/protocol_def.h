@@ -83,7 +83,8 @@ typedef enum
     PROTOCOL_REPORT_STATUS = 0xC3,
     PROTOCOL_REPORT_EVENT = 0xC4,
     PROTOCOL_REPORT_HEARTBEAT = 0xC5,
-    PROTOCOL_REPORT_WHEEL_SPEED = 0xC6
+    PROTOCOL_REPORT_WHEEL_SPEED = 0xC6,
+    PROTOCOL_REPORT_WHEEL_DUTY = 0xC7
 } protocol_report_t;
 
 /* Second byte of an ACK payload. */
@@ -113,6 +114,7 @@ typedef enum
 #define PROTOCOL_LEN_REPORT_EVENT       ((uint8_t)6u)
 #define PROTOCOL_LEN_REPORT_HEARTBEAT   ((uint8_t)3u)
 #define PROTOCOL_LEN_REPORT_WHEEL_SPEED ((uint8_t)8u)
+#define PROTOCOL_LEN_REPORT_WHEEL_DUTY  ((uint8_t)8u)
 
 /* Wheel order in REPORT_WHEEL_SPEED and in the per-wheel PID ids. */
 #define PROTOCOL_WHEEL_FL               ((uint8_t)0u)
@@ -169,6 +171,17 @@ typedef enum
 #define PROTOCOL_PARAM_PID_D_KP         ((uint8_t)0x29u)
 #define PROTOCOL_PARAM_PID_D_KI         ((uint8_t)0x2Au)
 #define PROTOCOL_PARAM_PID_D_KD         ((uint8_t)0x2Bu)
+
+/*
+ * Bench-only open-loop duty test, value = permille, 0x30..0x33 in A/B/C/D
+ * order. Accepted only while the chassis is enabled; each wheel's duty
+ * expires if the host stops refreshing it, and any velocity command leaves
+ * test mode (docs/bench/pid-tuning.md).
+ */
+#define PROTOCOL_PARAM_TEST_DUTY_A      ((uint8_t)0x30u)
+#define PROTOCOL_PARAM_TEST_DUTY_B      ((uint8_t)0x31u)
+#define PROTOCOL_PARAM_TEST_DUTY_C      ((uint8_t)0x32u)
+#define PROTOCOL_PARAM_TEST_DUTY_D      ((uint8_t)0x33u)
 
 //******************************** Declaring ********************************//
 

@@ -115,6 +115,14 @@ platform_err_t service_proto_send_arm(
 platform_err_t service_proto_send_wheel_speed(
                     const int16_t wheel_mm_s[PROTOCOL_WHEEL_COUNT]);
 
+/*
+ * Applied motor duty in FL, FR, RL, RR order, permille of full scale. Signed:
+ * the sign is the direction the bridge was told to drive. Sent next to the
+ * wheel speed so a tuning host can see saturation and integral wind-up.
+ */
+platform_err_t service_proto_send_wheel_duty(
+                    const int16_t wheel_permille[PROTOCOL_WHEEL_COUNT]);
+
 platform_err_t service_proto_send_status(uint8_t state,
                                          uint16_t fault_code,
                                          uint16_t battery_mv,

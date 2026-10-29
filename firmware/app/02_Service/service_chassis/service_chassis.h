@@ -53,6 +53,15 @@
 #define SERVICE_CHASSIS_WHEEL_RL        (2u)
 #define SERVICE_CHASSIS_WHEEL_RR        (3u)
 
+/*
+ * Bench open-loop test. The host writes a duty per wheel and must refresh it
+ * within the timeout; a wheel whose value goes stale coasts. The cap keeps a
+ * scripting mistake from commanding full torque on a wheel that is still on
+ * the floor: 40 % is well above the dead zone of these geared motors.
+ */
+#define SERVICE_CHASSIS_TEST_DUTY_MAX          ((int16_t)400)
+#define SERVICE_CHASSIS_TEST_DUTY_TIMEOUT_MS   ((uint32_t)300u)
+
 //******************************** Declaring ********************************//
 
 typedef enum
@@ -175,6 +184,28 @@ void service_chassis_get_odometry(service_chassis_odometry_t *out);
  */
 void service_chassis_get_wheel_speeds(
                     int16_t out_mm_s[SERVICE_CHASSIS_WHEEL_COUNT]);
+
+/*
+ * Duty the control tick last wrote to each motor, permille of full scale,
+ * FL/FR/RL/RR. All zeros when the chassis is disabled.
+ */
+void service_chassis_get_wheel_duty(
+                    int16_t out_permille[SERVICE_CHASSIS_WHEEL_COUNT]);
+
+/*
+ * Bench-only open loop: drive one wheel at a fixed duty, bypassing the speed
+ * loop. Requires an enabled, non-estopped chassis; |permille| is capped at
+ * SERVICE_CHASSIS_TEST_DUTY_MAX and each write expires after
+ * SERVICE_CHASSIS_TEST_DUTY_TIMEOUT_MS, so the host must keep refreshing it.
+ * Any velocity command, stop, disable or emergency stop leaves test mode.
+ * Call from the control task, the owner of the PID state.
+ */
+platform_err_t service_chassis_set_test_duty(uint8_t wheel,
+                                             int16_t permille,
+                                             uint32_t now_ms);
+
+/* TRUE while the open-loop test owns the motors. */
+platform_bool_t service_chassis_is_test_mode(void);
 
 /* TRUE while the command timeout is active (since the last valid frame). */
 platform_bool_t service_chassis_cmd_timed_out(void);
