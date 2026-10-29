@@ -21,7 +21,15 @@
  * This is a pure function with no hardware or OS dependency, so the same
  * implementation can be compiled on the PC for unit tests.
  *
- * @version V1.0 2026-10-28
+ * CRC-32/ISO-HDLC (the zlib / PNG / Ethernet variant) is used by the flash
+ * record headers:
+ *   polynomial : 0x04C11DB7 (reflected 0xEDB88320)
+ *   init       : 0xFFFFFFFF
+ *   refin/refout: yes
+ *   xorout     : 0xFFFFFFFF
+ *   check      : "123456789" -> 0xCBF43926
+ *
+ * @version V1.1 2026-10-29
  *
  * @note 1 tab == 4 spaces.
  *
@@ -40,6 +48,11 @@
 #define PLATFORM_CRC16_CCITT_POLYNOMIAL     ((uint16_t)0x1021u)
 #define PLATFORM_CRC16_CCITT_CHECK_VALUE    ((uint16_t)0x29B1u)
 
+#define PLATFORM_CRC32_INIT_VALUE           ((uint32_t)0xFFFFFFFFu)
+#define PLATFORM_CRC32_XOROUT_VALUE         ((uint32_t)0xFFFFFFFFu)
+#define PLATFORM_CRC32_POLYNOMIAL           ((uint32_t)0xEDB88320u)
+#define PLATFORM_CRC32_CHECK_VALUE          ((uint32_t)0xCBF43926u)
+
 //******************************** Declaring ********************************//
 
 /* One-shot calculation starting from the standard init value. */
@@ -52,5 +65,19 @@ uint16_t platform_crc16_ccitt(const uint8_t *data, uint32_t len);
 uint16_t platform_crc16_ccitt_update(uint16_t crc,
                                      const uint8_t *data,
                                      uint32_t len);
+
+/* One-shot CRC-32. The init/xorout are applied here, not by the caller. */
+uint32_t platform_crc32(const uint8_t *data, uint32_t len);
+
+/*
+ * Incremental CRC-32 over the raw register state: start with
+ * PLATFORM_CRC32_INIT_VALUE, feed each chunk, then XOR the final value with
+ * PLATFORM_CRC32_XOROUT_VALUE. This split exists so a record payload can be
+ * hashed while it is still in RAM, before the header that precedes it is
+ * known.
+ */
+uint32_t platform_crc32_update(uint32_t crc,
+                               const uint8_t *data,
+                               uint32_t len);
 
 #endif /* __PLATFORM_CRC_H__ */

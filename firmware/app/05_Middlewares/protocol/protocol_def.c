@@ -27,6 +27,12 @@
  * print "SET_ENABLE" without a second lookup table in the service layer.
  * SET_ARM_JOINTS and SET_VELOCITY deliberately do not require an ACK: a lost
  * joint frame is corrected by the next one and velocity has the 200 ms stop.
+ *
+ * The storage commands 0x08..0x0D are defined in the header (with their
+ * payload sizes) but deliberately absent here until the app layer registers
+ * handlers for them: a command in this table that has no handler answers
+ * ACK 0x04, and protocol.md documents that the firmware answers 0x03
+ * (unknown) for storage commands it does not implement yet.
  */
 static const protocol_cmd_info_t s_cmd_table[] =
 {
@@ -91,6 +97,8 @@ protocol_severity_t protocol_fault_severity(uint16_t code)
         case PROTOCOL_FAULT_CRC_LIMIT:
         case PROTOCOL_FAULT_BATTERY_LOW:
         case PROTOCOL_FAULT_OVERTEMP:
+        case PROTOCOL_FAULT_PARAM_INVALID:
+        case PROTOCOL_FAULT_CALIB_INVALID:
             return PROTOCOL_SEVERITY_WARN;
 
         case PROTOCOL_FAULT_OVERCURRENT:
@@ -98,6 +106,8 @@ protocol_severity_t protocol_fault_severity(uint16_t code)
         case PROTOCOL_FAULT_JOINT_LIMIT:
         case PROTOCOL_FAULT_JOINT_STALL:
         case PROTOCOL_FAULT_TRAJECTORY:
+        case PROTOCOL_FAULT_STORAGE_WRITE:
+        case PROTOCOL_FAULT_PARTITION:
             return PROTOCOL_SEVERITY_ERROR;
 
         case PROTOCOL_FAULT_COMM_TIMEOUT:

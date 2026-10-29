@@ -8,6 +8,7 @@
  * Build:
  *   gcc -std=c99 -Wall -Wextra -Werror \
  *       -I firmware/app/03_Platform/platform_common \
+ *       -I firmware/app/03_Platform/platform_mcu \
  *       -I firmware/app/04_Impl \
  *       -I firmware/app/03_Platform/platform_bsp \
  *       -I firmware/app/05_Middlewares/protocol \

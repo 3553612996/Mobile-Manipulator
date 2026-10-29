@@ -72,7 +72,13 @@ typedef enum
     PROTOCOL_CMD_SET_ENABLE = 0x04,
     PROTOCOL_CMD_SET_PARAM = 0x05,
     PROTOCOL_CMD_ESTOP = 0x06,
-    PROTOCOL_CMD_CLEAR_FAULT = 0x07
+    PROTOCOL_CMD_CLEAR_FAULT = 0x07,
+    PROTOCOL_CMD_PARAM_SAVE = 0x08,
+    PROTOCOL_CMD_PARAM_RESET = 0x09,
+    PROTOCOL_CMD_STORAGE_QUERY = 0x0A,
+    PROTOCOL_CMD_LOG_EXPORT = 0x0B,
+    PROTOCOL_CMD_CRASH_READ = 0x0C,
+    PROTOCOL_CMD_LOG_CLEAR = 0x0D
 } protocol_cmd_t;
 
 /* MCU -> Host periodic/event reports. */
@@ -84,7 +90,10 @@ typedef enum
     PROTOCOL_REPORT_EVENT = 0xC4,
     PROTOCOL_REPORT_HEARTBEAT = 0xC5,
     PROTOCOL_REPORT_WHEEL_SPEED = 0xC6,
-    PROTOCOL_REPORT_WHEEL_DUTY = 0xC7
+    PROTOCOL_REPORT_WHEEL_DUTY = 0xC7,
+    PROTOCOL_REPORT_STORAGE = 0xC8,
+    PROTOCOL_REPORT_LOG = 0xC9,
+    PROTOCOL_REPORT_CRASH = 0xCA
 } protocol_report_t;
 
 /* Second byte of an ACK payload. */
@@ -94,7 +103,9 @@ typedef enum
     PROTOCOL_RESULT_RANGE = 1,      /* Value outside the allowed range. */
     PROTOCOL_RESULT_STATE = 2,      /* Command not allowed in this state. */
     PROTOCOL_RESULT_UNKNOWN_CMD = 3,
-    PROTOCOL_RESULT_FAILED = 4      /* Execution failed (e.g. joint limit). */
+    PROTOCOL_RESULT_FAILED = 4,     /* Execution failed (e.g. joint limit). */
+    PROTOCOL_RESULT_BUSY = 5,       /* A storage operation is in progress. */
+    PROTOCOL_RESULT_STORAGE_UNAVAILABLE = 6  /* External flash not usable. */
 } protocol_result_t;
 
 /* Fixed payload sizes, in bytes. Keep in sync with the table below. */
@@ -105,6 +116,12 @@ typedef enum
 #define PROTOCOL_LEN_SET_PARAM          ((uint8_t)5u)
 #define PROTOCOL_LEN_ESTOP              ((uint8_t)0u)
 #define PROTOCOL_LEN_CLEAR_FAULT        ((uint8_t)2u)
+#define PROTOCOL_LEN_PARAM_SAVE         ((uint8_t)1u)
+#define PROTOCOL_LEN_PARAM_RESET        ((uint8_t)2u)
+#define PROTOCOL_LEN_STORAGE_QUERY      ((uint8_t)0u)
+#define PROTOCOL_LEN_LOG_EXPORT         ((uint8_t)6u)
+#define PROTOCOL_LEN_CRASH_READ         ((uint8_t)2u)
+#define PROTOCOL_LEN_LOG_CLEAR          ((uint8_t)2u)
 
 #define PROTOCOL_ARM_JOINT_COUNT        ((uint8_t)6u)
 
@@ -115,6 +132,40 @@ typedef enum
 #define PROTOCOL_LEN_REPORT_HEARTBEAT   ((uint8_t)3u)
 #define PROTOCOL_LEN_REPORT_WHEEL_SPEED ((uint8_t)8u)
 #define PROTOCOL_LEN_REPORT_WHEEL_DUTY  ((uint8_t)8u)
+#define PROTOCOL_LEN_REPORT_STORAGE     ((uint8_t)24u)
+#define PROTOCOL_LEN_REPORT_LOG_HEADER  ((uint8_t)15u)
+#define PROTOCOL_LEN_REPORT_CRASH_HEADER ((uint8_t)7u)
+
+/* The frame payload stack is 64 bytes; the two variable-length reports share
+ * it between their fixed header and the text/data bytes. */
+#define PROTOCOL_REPORT_LOG_TEXT_MAX    ((uint8_t)(PROTOCOL_PAYLOAD_MAX - \
+                                                   PROTOCOL_LEN_REPORT_LOG_HEADER))
+#define PROTOCOL_REPORT_CRASH_DATA_MAX  ((uint8_t)(PROTOCOL_PAYLOAD_MAX - \
+                                                   PROTOCOL_LEN_REPORT_CRASH_HEADER))
+
+/* PARAM_SAVE / PARAM_RESET scope. */
+#define PROTOCOL_STORAGE_SCOPE_PARAM    ((uint8_t)0u)
+#define PROTOCOL_STORAGE_SCOPE_CALIB    ((uint8_t)1u)
+#define PROTOCOL_STORAGE_SCOPE_ALL      ((uint8_t)2u)
+
+/* Confirm byte of PARAM_RESET and LOG_CLEAR. */
+#define PROTOCOL_STORAGE_CONFIRM        ((uint8_t)0xA5u)
+
+/* LOG_EXPORT source and LOG_CLEAR source (0/1) plus the crash extension. */
+#define PROTOCOL_LOG_SOURCE_RUN         ((uint8_t)0u)
+#define PROTOCOL_LOG_SOURCE_FAULT       ((uint8_t)1u)
+#define PROTOCOL_LOG_SOURCE_CRASH       ((uint8_t)2u)   /* LOG_CLEAR only. */
+#define PROTOCOL_LOG_SOURCE_ALL         ((uint8_t)3u)   /* LOG_CLEAR only. */
+
+/* CRASH_READ slot meaning "newest valid slot". */
+#define PROTOCOL_CRASH_SLOT_LATEST      ((uint8_t)0xFFu)
+
+/* REPORT_LOG flags. */
+#define PROTOCOL_LOG_FLAG_MORE          ((uint8_t)0x01u)
+#define PROTOCOL_LOG_FLAG_END           ((uint8_t)0x02u)
+
+/* REPORT_CRASH flags. */
+#define PROTOCOL_CRASH_FLAG_MORE        ((uint8_t)0x01u)
 
 /* Wheel order in REPORT_WHEEL_SPEED and in the per-wheel PID ids. */
 #define PROTOCOL_WHEEL_FL               ((uint8_t)0u)
@@ -134,6 +185,10 @@ typedef enum
 #define PROTOCOL_FAULT_BATTERY_LOW      ((uint16_t)0x0401u)
 #define PROTOCOL_FAULT_OVERTEMP         ((uint16_t)0x0402u)
 #define PROTOCOL_FAULT_ESTOP            ((uint16_t)0x0501u)
+#define PROTOCOL_FAULT_PARAM_INVALID    ((uint16_t)0x0601u)
+#define PROTOCOL_FAULT_CALIB_INVALID    ((uint16_t)0x0602u)
+#define PROTOCOL_FAULT_STORAGE_WRITE    ((uint16_t)0x0603u)
+#define PROTOCOL_FAULT_PARTITION        ((uint16_t)0x0604u)
 
 #define PROTOCOL_CLEAR_ALL_FAULTS       ((uint16_t)0xFFFFu)
 
@@ -182,6 +237,24 @@ typedef enum
 #define PROTOCOL_PARAM_TEST_DUTY_B      ((uint8_t)0x31u)
 #define PROTOCOL_PARAM_TEST_DUTY_C      ((uint8_t)0x32u)
 #define PROTOCOL_PARAM_TEST_DUTY_D      ((uint8_t)0x33u)
+
+/* Runtime options that live in the parameter blob. */
+#define PROTOCOL_PARAM_LOG_LEVEL        ((uint8_t)0x40u)
+#define PROTOCOL_PARAM_DEADZONE_ENABLE  ((uint8_t)0x41u)
+
+/*
+ * Calibration ids. 0x50..0x53 counts_per_mm x1000, 0x54..0x57 forward
+ * break-away duty (permille), 0x58..0x5B reverse break-away duty, 0x5C..0x5F
+ * direction (+1/-1), all in A/B/C/D order.
+ */
+#define PROTOCOL_PARAM_COUNTS_PER_MM_A  ((uint8_t)0x50u)
+#define PROTOCOL_PARAM_COUNTS_PER_MM_D  ((uint8_t)0x53u)
+#define PROTOCOL_PARAM_DUTY_FWD_A       ((uint8_t)0x54u)
+#define PROTOCOL_PARAM_DUTY_FWD_D       ((uint8_t)0x57u)
+#define PROTOCOL_PARAM_DUTY_REV_A       ((uint8_t)0x58u)
+#define PROTOCOL_PARAM_DUTY_REV_D       ((uint8_t)0x5Bu)
+#define PROTOCOL_PARAM_DIRECTION_A      ((uint8_t)0x5Cu)
+#define PROTOCOL_PARAM_DIRECTION_D      ((uint8_t)0x5Fu)
 
 //******************************** Declaring ********************************//
 
