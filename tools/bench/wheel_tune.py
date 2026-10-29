@@ -6,15 +6,17 @@
     python tools/bench/wheel_tune.py --port COM5 deadzone --wheels A --step 40
     python tools/bench/wheel_tune.py --port COM5 step --speed 200 --yes
     python tools/bench/wheel_tune.py --port COM5 step --speed 200 \\
-        --kp 1.0,1.5 --ki 0.6 --yes
+        --kp 1.0 1.5 --ki 0.6 --yes
 
 Two measurements, both against the real firmware:
 
 deadzone  Drives one wheel at a time in open loop through SET_PARAM 0x30..0x33
           (test duty, permille). The firmware reports the duty it actually
-          wrote (0xC7) and the encoder speed (0xC6) at 50 Hz, so the result is
-          "smallest duty that makes this wheel turn", per wheel and per
-          direction, not an estimate from the command we sent.
+          wrote (0xC7) and the encoder speed (0xC6), so the result is measured,
+          not inferred from the command we sent. Two numbers come out:
+          the lowest duty that turned the wheel once (`edge`), and the lowest
+          duty that turned it `--repeat` times out of `--repeat` (`reliable`).
+          Only the second is repeatable enough to design around.
 
 step      Closed loop. Streams SET_VELOCITY at 50 Hz and records the wheel
           speed response; prints rise time, overshoot, steady-state error and
@@ -29,8 +31,9 @@ needs --yes. The MCU also refuses test duty unless the chassis is enabled, caps
 it at +-400 permille, and drops a wheel that stops being refreshed for 300 ms.
 On exit (including Ctrl-C) the tool disables the chassis.
 
-Results are printed as a Markdown table and appended to CSV for
-docs/bench/pid-tuning.md.
+Results are printed as a Markdown table and appended to CSV under build/
+(git-ignored), then pasted into docs/bench/pid-tuning.md, which also records
+the measurement conditions.
 """
 
 from __future__ import annotations
@@ -51,6 +54,7 @@ from proto_loop import Client, SerialLink  # noqa: E402
 
 WHEELS = ("A", "B", "C", "D")          # FL, FR, RL, RR
 DUTY_REFRESH_S = 0.10                  # firmware expiry is 300 ms
+CONFIRM_STEP = 5                       # permille per step in the reliability walk
 VELOCITY_PERIOD_S = 0.02               # 50 Hz, firmware watchdog is 200 ms
 COAST_S = 0.25                         # zero-duty settle before each step
 DEFAULT_POLL_S = 0.005
@@ -176,15 +180,27 @@ def hold_duty(tune: Tune, wheel: int, duty: int, hold_s: float) -> dict:
 
 def measure_wheel(tune: Tune, wheel: int, direction: int, step: int,
                   max_duty: int, hold_s: float, threshold: float,
-                  verbose: bool = True) -> dict | None:
-    """Coarse ramp then bisection, for one wheel and one sign of duty."""
+                  repeat: int = 3, verbose: bool = True) -> dict | None:
+    """Find the turn-on duty, then confirm it repeats, for one sign.
 
-    def tries(duty: int) -> dict:
+    Two numbers come out of this, because they answer different questions:
+
+    - `edge`: the lowest duty that turned the wheel *once*. That is the
+      physical breakaway point, but at exactly that duty the wheel only starts
+      when the rotor happens to sit at a favourable cogging position -- the
+      first bench run produced 12.9 mm/s at +55 one moment and 0 mm/s at the
+      same duty moments later;
+    - `reliable`: the lowest duty that started the wheel in `repeat` out of
+      `repeat` attempts from rest. This is the number a controller may use as
+      a feed-forward offset; `edge` is not.
+    """
+
+    def tries(duty: int, label: str = "") -> dict:
         hold_duty(tune, wheel, 0, COAST_S)      # settle before the step
         result = hold_duty(tune, wheel, duty, hold_s)
         if verbose:
             print(f"    {WHEELS[wheel]} duty={duty:+5d} -> "
-                  f"{result['mean_mm_s']:7.1f} mm/s")
+                  f"{result['mean_mm_s']:7.1f} mm/s{label}")
         return result
 
     # Phase 1: ramp up in `step` until the wheel turns. Starting the ramp at
@@ -214,14 +230,52 @@ def measure_wheel(tune: Tune, wheel: int, direction: int, step: int,
         else:
             low = mid
 
-    # Re-measure at the decision point so the table carries a real speed.
-    final = tries(direction * high)
+    edge = high
+    edge_result = tries(direction * edge, "  (edge)")
+    hold_duty(tune, wheel, 0, COAST_S)
+
+    # Phase 3: walk up until the wheel starts every time. Two steps of margin
+    # covers the run-to-run scatter seen on the first sweep without spending
+    # many extra attempts.
+    reliable = None
+    reliable_speed = 0.0
+    duty = edge
+    for _ in range(2 * step // CONFIRM_STEP + 2):
+        if duty > max_duty:
+            break
+        started = 0
+        last = None
+        for _ in range(repeat):
+            last = tries(direction * duty)
+            if last["mean_mm_s"] >= threshold:
+                started += 1
+        if started == repeat:
+            reliable = duty
+            reliable_speed = last["mean_mm_s"]
+            break
+        if verbose:
+            print(f"    {WHEELS[wheel]} duty={duty:+5d} 只起转 "
+                  f"{started}/{repeat}，继续上探")
+        duty += CONFIRM_STEP
+
     hold_duty(tune, wheel, 0, COAST_S)
 
     return {"wheel": WHEELS[wheel], "dir": "+" if direction > 0 else "-",
-            "deadzone": high, "speed_at_deadzone": final["mean_mm_s"],
+            "edge": edge, "speed_at_edge": edge_result["mean_mm_s"],
             "speed_monotonic_at": first["mean_mm_s"],
-            "applied_at_deadzone": final["applied"]}
+            "reliable": reliable, "speed_at_reliable": reliable_speed,
+            "repeat": repeat, "applied_at_edge": edge_result["applied"]}
+
+
+def measure_full_scale(tune: Tune, wheel: int, max_duty: int,
+                       verbose: bool = True) -> float:
+    """Wheel speed at the top of the open-loop range, for scale reference."""
+    result = hold_duty(tune, wheel, max_duty, 1.0)
+    hold_duty(tune, wheel, 0, COAST_S)
+    if verbose:
+        print(f"    {WHEELS[wheel]} duty={max_duty:+5d} -> "
+              f"{result['mean_mm_s']:7.1f} mm/s  (满量程参考)")
+    return result["mean_mm_s"]
 
 
 def run_deadzone(tune: Tune, args) -> int:
@@ -231,6 +285,7 @@ def run_deadzone(tune: Tune, args) -> int:
     print("   每个轮子单独驱动，其余三轮保持在 0\n")
 
     rows = []
+    full_scale = {}
     tune.enable(True)
 
     for wheel in wheels:
@@ -242,38 +297,52 @@ def run_deadzone(tune: Tune, args) -> int:
             label = "正向" if direction > 0 else "反向"
             print(f"  {WHEELS[wheel]} 轮 {label}:")
             row = measure_wheel(tune, wheel, direction, args.step,
-                                args.max_duty, args.hold, args.threshold)
+                                args.max_duty, args.hold, args.threshold,
+                                args.repeat)
             if row is None:
                 print(f"    !! {args.max_duty}‰ 内未起转")
                 rows.append({"wheel": WHEELS[wheel],
                              "dir": "+" if direction > 0 else "-",
-                             "deadzone": "", "speed_at_deadzone": "",
-                             "speed_monotonic_at": "", "applied_at_deadzone": ""})
+                             "edge": "", "speed_at_edge": "",
+                             "reliable": "", "speed_at_reliable": "",
+                             "speed_monotonic_at": "", "applied_at_edge": ""})
             else:
                 rows.append(row)
+
+        full_scale[WHEELS[wheel]] = measure_full_scale(tune, wheel,
+                                                       args.max_duty)
 
     # Leaving test mode: disable drops the bridges and clears the test state.
     tune.enable(False)
 
-    _print_deadzone_table(rows, args.threshold)
+    _print_deadzone_table(rows, args.threshold, full_scale)
     _append_csv(args.out, "deadzone", rows)
     return 0
 
 
-def _print_deadzone_table(rows, threshold: float) -> None:
-    print("\n| 轮 | 方向 | 死区 (‰) | 死区处速度 (mm/s) | 起转步速度 (mm/s) "
-          "| 回读占空比 (‰) |")
-    print("|----|------|----------|-------------------|-------------------|"
+def _print_deadzone_table(rows, threshold: float, full_scale: dict) -> None:
+    repeat = next((r["repeat"] for r in rows if r.get("repeat")), 3)
+    print("\n| 轮 | 方向 | 单次起转 (‰) | 可靠起转 (‰, "
+          f"{repeat}×全起转) | 可靠处速度 (mm/s) | 回读占空比 (‰) |")
+    print("|----|------|--------------|---------------|-------------------|"
           "----------------|")
     for row in rows:
-        if row["deadzone"] == "":
+        if row["edge"] == "":
             print(f"| {row['wheel']} | {row['dir']} | 未起转 | - | - | - |")
             continue
-        print(f"| {row['wheel']} | {row['dir']} | {row['deadzone']} "
-              f"| {row['speed_at_deadzone']:.0f} "
-              f"| {row['speed_monotonic_at']:.0f} "
-              f"| {row['applied_at_deadzone']} |")
-    print(f"\n判定阈值 {threshold:.0f} mm/s；占空比以满量程 1000‰ 计。")
+        reliable = row["reliable"] if row["reliable"] is not None else ">上限"
+        speed = (f"{row['speed_at_reliable']:.0f}"
+                 if row["reliable"] is not None else "-")
+        print(f"| {row['wheel']} | {row['dir']} | {row['edge']} "
+              f"| {reliable} | {speed} | {row['applied_at_edge']} |")
+
+    print("\n| 轮 | 400‰ 处轮速 (mm/s) |")
+    print("|----|--------------------|")
+    for name, speed in full_scale.items():
+        print(f"| {name} | {speed:.0f} |")
+
+    print(f"\n判定阈值 {threshold:.0f} mm/s；占空比以满量程 1000‰ 计。"
+          "\n单次起转只在转子处于有利位置时发生，控制里应使用可靠起转值。")
 
 
 # ------------------------------------------------------------ step response
@@ -417,21 +486,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", help="串口名，例如 COM5 或 /dev/ttyUSB0")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--wheels", default="A,B,C,D")
-    parser.add_argument("--out", default="tools/bench/results/wheel_tune.csv",
-                        help="CSV 输出路径（按测量类型加后缀）")
+    parser.add_argument("--out", default="build/results/wheel_tune.csv",
+                        help="CSV 输出路径（按测量类型加后缀），默认落在 build/ 下不入库")
     parser.add_argument("--yes", action="store_true",
                         help="确认轮子会转动（必须显式给出）")
     parser.add_argument("--echo", action="store_true", help="打印收发帧")
 
     sub = parser.add_subparsers(dest="command")
-    dz = sub.add_parser("deadzone", help="开环死区扫描")
+
+    # --yes is accepted on either side of the subcommand: it reads naturally
+    # at the end ("deadzone --yes"), but argparse only binds top-level options
+    # before the subcommand. SUPPRESS keeps the subparser copy from resetting
+    # the value the top-level parser already stored.
+    confirm = argparse.ArgumentParser(add_help=False)
+    confirm.add_argument("--yes", action="store_true", default=argparse.SUPPRESS,
+                         help=argparse.SUPPRESS)
+
+    dz = sub.add_parser("deadzone", parents=[confirm], help="开环死区扫描")
     dz.add_argument("--step", type=int, default=40, help="粗扫步长，‰")
     dz.add_argument("--max-duty", type=int, default=400, help="扫描上限，‰")
     dz.add_argument("--hold", type=float, default=0.6, help="每档保持时间，s")
     dz.add_argument("--threshold", type=float, default=10.0,
                     help="判定起转的速度阈值，mm/s")
+    dz.add_argument("--repeat", type=int, default=3,
+                    help="可靠起转判定的重复次数（每次从静止起转）")
 
-    st = sub.add_parser("step", help="闭环阶跃响应")
+    st = sub.add_parser("step", parents=[confirm], help="闭环阶跃响应")
     st.add_argument("--speed", type=int, default=200, help="目标轮速，mm/s")
     st.add_argument("--hold", type=float, default=2.0, help="记录时长，s")
     st.add_argument("--kp", type=float, nargs="+")
