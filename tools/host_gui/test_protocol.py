@@ -185,6 +185,80 @@ class AckAndReportTests(unittest.TestCase):
         self.assertIsNone(p.decode_odom(b""))
         self.assertIsNone(p.decode_wheel_speed(b"\x00" * 7))
         self.assertIsNone(p.decode_wheel_duty(b"\x00" * 9))
+        self.assertIsNone(p.decode_storage(b"\x00" * 23))
+        self.assertIsNone(p.decode_log(b"\x00" * 14))
+        self.assertIsNone(p.decode_crash(b"\x00" * 6))
+
+
+class StorageTests(unittest.TestCase):
+    def test_param_save_vector(self):
+        frame = p.build_frame(p.Cmd.PARAM_SAVE, 4, p.param_save_payload(0))
+        self.assertEqual(frame, p.VECTOR_PARAM_SAVE)
+
+    def test_storage_query_vector(self):
+        self.assertEqual(p.build_frame(p.Cmd.STORAGE_QUERY, 5),
+                         p.VECTOR_STORAGE_QUERY)
+
+    def test_log_export_vector(self):
+        frame = p.build_frame(p.Cmd.LOG_EXPORT, 6,
+                              p.log_export_payload(0, 1, 0))
+        self.assertEqual(frame, p.VECTOR_LOG_EXPORT)
+
+    def test_param_reset_requires_confirm(self):
+        self.assertEqual(p.param_reset_payload(1), bytes((1, 0xA5)))
+
+    def test_storage_round_trip(self):
+        import struct
+        raw = p.build_frame(p.Report.STORAGE, 7, struct.pack(
+            "<BBHHHIIII", 0x03, 1, 7, 3, 0, 42, 1000, 5, 99))
+        frame = p.FrameParser().feed(raw)[0]
+        st = p.decode_storage(frame.payload)
+        self.assertEqual(st["param_seq"], 7)
+        self.assertEqual(st["calib_seq"], 3)
+        self.assertEqual(st["boot_total"], 42)
+        self.assertFalse(st["dirty"])
+        self.assertTrue(st["param_valid"])
+        self.assertFalse(st["save_failed"])
+
+    def test_log_round_trip(self):
+        import struct
+        head = struct.pack("<BBBBIIHB", 0, 1, 6, 0x01, 123, 9, 0, 5)
+        raw = p.build_frame(p.Report.LOG, 8, head + b"hello")
+        frame = p.FrameParser().feed(raw)[0]
+        rec = p.decode_log(frame.payload)
+        self.assertEqual(rec["text"], "hello")
+        self.assertEqual(rec["seq"], 9)
+        self.assertTrue(rec["more"])
+        self.assertFalse(rec["end"])
+
+    def test_log_end_frame(self):
+        import struct
+        head = struct.pack("<BBBBIIHB", 0, 1, 6, 0x02, 124, 10, 0, 0)
+        rec = p.decode_log(head)
+        self.assertTrue(rec["end"])
+        self.assertEqual(rec["text"], "")
+
+    def test_crash_chunk_round_trip(self):
+        import struct
+        data = bytes(range(57))
+        head = struct.pack("<BBHHB", 2, 0x01, 0, 1024, 57)
+        rec = p.decode_crash(head + data)
+        self.assertEqual(rec["slot"], 2)
+        self.assertEqual(rec["offset"], 0)
+        self.assertEqual(rec["total_len"], 1024)
+        self.assertEqual(rec["data"], data)
+        self.assertTrue(rec["more"])
+
+    def test_calib_param_ids_are_named(self):
+        # Deadzone, encoder scale and wheel direction belong to calibration.
+        self.assertIn(0x01, p.CALIB_PARAM_IDS)
+        self.assertIn(0x02, p.CALIB_PARAM_IDS)
+        for param_id in range(0x50, 0x60):
+            self.assertIn(param_id, p.CALIB_PARAM_IDS)
+            self.assertIn(param_id, p.PARAM_NAMES)
+        self.assertNotIn(0x30, p.CALIB_PARAM_IDS)
+        self.assertIn(0x40, p.PARAM_NAMES)
+        self.assertIn(0x41, p.PARAM_NAMES)
 
 
 if __name__ == "__main__":
