@@ -1,0 +1,152 @@
+<?xml version="1.0"?>
+<!--
+  移动抓取机器人的基础 TF 模型（M4）。
+
+  只描述"坐标系在哪"，不描述外观细节：没有 inertial、没有 collision、
+  没有 mesh。那些是 Gazebo 与 MoveIt 才需要的，现在加上只会增加维护成本。
+
+  坐标系约定（REP-103）：
+    base_link  底盘几何中心，z = 0 在地面；x 向前、y 向左、z 向上
+    laser_link 雷达旋转中心，由 lidar.yaml 的 frame_id 使用
+
+  车头朝 +x。左侧为 +y，与固件的 FL / FR / RL / RR 轮序一致。
+-->
+<robot name="mobile_manipulator" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ===================== 底盘尺寸（米） ===================== -->
+  <!-- 待实测：卷尺量含轮外缘的长、宽，以及底盘底面离地高度。 -->
+  <xacro:property name="base_length"    value="0.245"/>
+  <xacro:property name="base_width"     value="0.195"/>
+  <xacro:property name="base_height"    value="0.100"/>
+  <xacro:property name="ground_clearance" value="0.040"/>
+
+  <!-- ===================== 轮系（米） ===================== -->
+  <!-- wheel_separation 必须等于固件 SET_PARAM 0x01 的轮距（默认 240 mm），
+       否则 /odom 的 pose 与 twist 会对不上（见 base.yaml 的说明）。 -->
+  <xacro:property name="wheel_separation" value="0.240"/>
+  <!-- wheelbase 待实测：前后轮轴心距。 -->
+  <xacro:property name="wheelbase"        value="0.185"/>
+  <xacro:property name="wheel_radius"     value="0.030"/>
+  <xacro:property name="wheel_width"      value="0.035"/>
+
+  <!-- ===================== 第二层板 ===================== -->
+  <!-- 双层结构：底盘顶面到第二层板之间 64 mm。直接给"第二层板上表面的离地
+       高度"，换算关系写在这里；如果 64 mm 量的是两块板中心距而不是间隙，
+       改这一个值就行。
+         0.040（离地）+ 0.100（底盘高）+ 0.064（层间距）= 0.204 -->
+  <xacro:property name="deck2_top_z"       value="0.204"/>
+  <xacro:property name="deck2_thickness"   value="0.005"/>  <!-- 待实测 -->
+  <xacro:property name="deck2_length"      value="0.245"/>  <!-- 待实测 -->
+  <xacro:property name="deck2_width"       value="0.195"/>  <!-- 待实测 -->
+
+  <!-- ===================== 机械臂底座 ===================== -->
+  <!-- 旋转底座高出第二层板上表面 70 mm；arm_base_link 就是旋转轴中心。 -->
+  <xacro:property name="arm_base_height" value="0.070"/>
+  <xacro:property name="arm_base_offset_z" value="0.000"/>  <!-- 底座是否另有加高垫 -->
+  <xacro:property name="arm_base_x"        value="0.000"/>  <!-- 待实测：在板上的前后位置 -->
+  <xacro:property name="arm_base_y"        value="0.000"/>  <!-- 待实测：在板上的左右位置 -->
+  <xacro:property name="arm_base_radius"   value="0.030"/>  <!-- 待实测 -->
+
+  <!-- ===================== 雷达（米） ===================== -->
+  <!-- 待实测：从底盘几何中心量到雷达旋转中心。 -->
+  <xacro:property name="laser_x" value="0.080"/>
+  <xacro:property name="laser_y" value="0.000"/>
+  <xacro:property name="laser_z" value="0.150"/>
+  <!-- 安装偏航角一律放 config/lidar.yaml 的 angle_offset_deg，
+       这里保持 0，两处都设会重复旋转，地图会整体歪一个角度。 -->
+  <xacro:property name="laser_yaw" value="0.000"/>
+  <xacro:property name="laser_radius" value="0.035"/>
+  <xacro:property name="laser_height" value="0.040"/>
+
+  <!-- ===================== 底盘本体 ===================== -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 ${ground_clearance + base_height / 2}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${base_length} ${base_width} ${base_height}"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <!-- ===================== 四个麦克纳姆轮 ===================== -->
+  <!-- 轮子用 fixed 关节：固件只上报转速，没有轮子转角，continuous 关节
+       缺少 joint_states 会让 robot_state_publisher 报错刷屏。等机械臂接入、
+       引入 joint_state_publisher 后再考虑改成 continuous。 -->
+  <xacro:macro name="wheel" params="name x y">
+    <link name="${name}">
+      <visual>
+        <!-- 圆柱默认沿 z 轴，绕 x 转 90° 后轴向变成 y，即轮轴方向。 -->
+        <origin xyz="0 0 0" rpy="${xacro.pi / 2} 0 0"/>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+      </visual>
+    </link>
+
+    <joint name="${name}_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="${name}"/>
+      <origin xyz="${x} ${y} ${wheel_radius}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:wheel name="wheel_fl" x="${wheelbase / 2}"  y="${wheel_separation / 2}"/>
+  <xacro:wheel name="wheel_fr" x="${wheelbase / 2}"  y="${-wheel_separation / 2}"/>
+  <xacro:wheel name="wheel_rl" x="${-wheelbase / 2}" y="${wheel_separation / 2}"/>
+  <xacro:wheel name="wheel_rr" x="${-wheelbase / 2}" y="${-wheel_separation / 2}"/>
+
+  <!-- ===================== 第二层板 ===================== -->
+  <link name="deck2_link">
+    <visual>
+      <!-- 坐标系放在板的上表面，视觉体往下一块板厚。 -->
+      <origin xyz="0 0 ${-deck2_thickness / 2}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${deck2_length} ${deck2_width} ${deck2_thickness}"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="deck2_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="deck2_link"/>
+    <origin xyz="0 0 ${deck2_top_z}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ===================== 机械臂底座 ===================== -->
+  <!-- arm_base_link = 旋转轴中心。三个臂节（arm_link1~3）等量完长度再加，
+       它们挂在 arm_base_link 下面，不影响现在的 TF 树。 -->
+  <link name="arm_base_link">
+    <visual>
+      <!-- 立柱从第二层板延伸到本坐标系原点，所以视觉中心在原点下方一半处。 -->
+      <origin xyz="0 0 ${-(arm_base_height + arm_base_offset_z) / 2}" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="${arm_base_radius}"
+                  length="${arm_base_height + arm_base_offset_z}"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="arm_base_joint" type="fixed">
+    <parent link="deck2_link"/>
+    <child link="arm_base_link"/>
+    <origin xyz="${arm_base_x} ${arm_base_y} ${arm_base_height + arm_base_offset_z}"
+            rpy="0 0 0"/>
+  </joint>
+
+  <!-- ===================== 激光雷达 ===================== -->
+  <link name="laser_link">
+    <visual>
+      <origin xyz="0 0 ${laser_height / 2}" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="${laser_radius}" length="${laser_height}"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser_link"/>
+    <origin xyz="${laser_x} ${laser_y} ${laser_z}" rpy="0 0 ${laser_yaw}"/>
+  </joint>
+
+</robot>
