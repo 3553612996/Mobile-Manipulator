@@ -1,8 +1,8 @@
 /* L1 unit test for platform_middleware. Runs on the PC, no hardware needed.
  *
  * Covers the shared algorithms every layer above uses: the lock-free ring
- * buffer that carries UART bytes out of the interrupt, CRC-16/CCITT-FALSE, and
- * the filters applied to sampled values.
+ * buffer that carries UART bytes out of the interrupt, CRC-16/CCITT-FALSE, the
+ * filters applied to sampled values, and the PID controller.
  *
  * Build (MinGW or any host gcc):
  *   gcc -std=c99 -Wall -Wextra \
@@ -13,6 +13,7 @@
  *       firmware/app/03_Platform/platform_middleware/platform_ringbuf.c \
  *       firmware/app/03_Platform/platform_middleware/platform_crc.c \
  *       firmware/app/03_Platform/platform_middleware/platform_filter.c \
+ *       firmware/app/03_Platform/platform_middleware/platform_pid.c \
  *       -o build/test_platform_middleware
  */
 
@@ -20,6 +21,7 @@
 #include "platform_ringbuf.h"
 #include "platform_crc.h"
 #include "platform_filter.h"
+#include "platform_pid.h"
 
 static int g_failed = 0;
 
@@ -125,6 +127,93 @@ static void test_ringbuf_param(void)
           "空句柄应被拒绝");
 }
 
+static int float_near(float a, float b)
+{
+    float d = a - b;
+
+    return (d < 0.0001f) && (d > -0.0001f);
+}
+
+static void test_pid_param(void)
+{
+    platform_pid_t pid = { 0 };
+    platform_pid_cfg_t cfg = { 1.0f, 0.0f, 0.0f, -100.0f, 100.0f };
+
+    CHECK(platform_pid_init(NULL, &cfg) == PLATFORM_ERR_PARAM,
+          "PID 空句柄应被拒绝");
+    CHECK(platform_pid_init(&pid, NULL) == PLATFORM_ERR_PARAM,
+          "PID 空配置应被拒绝");
+
+    cfg.kp = -1.0f;
+    CHECK(platform_pid_init(&pid, &cfg) == PLATFORM_ERR_PARAM,
+          "负 Kp 应被拒绝");
+    cfg.kp = 1.0f;
+
+    cfg.output_min = 10.0f;
+    cfg.output_max = 10.0f;
+    CHECK(platform_pid_init(&pid, &cfg) == PLATFORM_ERR_PARAM,
+          "输出上下限相等应被拒绝");
+}
+
+static void test_pid_p_and_d(void)
+{
+    platform_pid_t pid;
+    platform_pid_cfg_t cfg = { 2.0f, 0.0f, 0.0f, -1000.0f, 1000.0f };
+
+    CHECK(platform_pid_init(&pid, &cfg) == PLATFORM_ERR_OK, "PID 初始化");
+    CHECK(float_near(platform_pid_update(&pid, 100.0f, 0.0f, 0.01f), 200.0f),
+          "P 项：误差 100、Kp=2 应输出 200");
+    CHECK(float_near(platform_pid_get_output(&pid), 200.0f),
+          "输出应可读回");
+
+    /* Derivative acts on the measurement, so a setpoint step does not kick. */
+    cfg.kp = 0.0f;
+    cfg.kd = 1.0f;
+    CHECK(platform_pid_init(&pid, &cfg) == PLATFORM_ERR_OK, "PID 重初始化");
+
+    CHECK(float_near(platform_pid_update(&pid, 0.0f, 10.0f, 0.1f), 0.0f),
+          "第一个采样应跳过微分");
+    CHECK(float_near(platform_pid_update(&pid, 0.0f, 20.0f, 0.1f), -100.0f),
+          "测量值上升 10/0.1s 应输出 -100");
+    CHECK(float_near(platform_pid_update(&pid, 100.0f, 20.0f, 0.1f), 0.0f),
+          "设定值阶跃不应产生微分冲击");
+}
+
+static void test_pid_integral_and_windup(void)
+{
+    platform_pid_t pid;
+    platform_pid_cfg_t cfg = { 0.0f, 1.0f, 0.0f, -100.0f, 100.0f };
+    uint8_t i;
+
+    CHECK(platform_pid_init(&pid, &cfg) == PLATFORM_ERR_OK, "积分 PID 初始化");
+    CHECK(float_near(platform_pid_update(&pid, 10.0f, 0.0f, 0.1f), 1.0f),
+          "积分第一步应为 1");
+    CHECK(float_near(platform_pid_update(&pid, 10.0f, 0.0f, 0.1f), 2.0f),
+          "积分第二步应为 2");
+
+    platform_pid_reset(&pid);
+    CHECK(float_near(platform_pid_update(&pid, 10.0f, 0.0f, 0.1f), 1.0f),
+          "reset 后积分应清零");
+
+    /* Saturated P output must not keep integrating in the same direction. */
+    cfg.kp = 100.0f;
+    cfg.ki = 1.0f;
+    cfg.output_min = -100.0f;
+    cfg.output_max = 100.0f;
+    CHECK(platform_pid_init(&pid, &cfg) == PLATFORM_ERR_OK,
+          "抗饱和 PID 初始化");
+
+    for (i = 0u; i < 100u; i++)
+    {
+        (void)platform_pid_update(&pid, 100.0f, 0.0f, 0.01f);
+    }
+
+    CHECK(float_near(platform_pid_get_output(&pid), 100.0f),
+          "持续误差时输出应保持在上限");
+    CHECK(float_near(platform_pid_update(&pid, 0.0f, 0.0f, 0.01f), 0.0f),
+          "误差反向时不应被积压的积分顶住");
+}
+
 static void test_filters(void)
 {
     int32_t storage[4];
@@ -169,6 +258,9 @@ int main(void)
     test_ringbuf_wrap();
     test_ringbuf_param();
     test_filters();
+    test_pid_param();
+    test_pid_p_and_d();
+    test_pid_integral_and_windup();
 
     if (g_failed != 0)
     {

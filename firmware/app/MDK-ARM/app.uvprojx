@@ -998,6 +998,11 @@
               <FileType>1</FileType>
               <FilePath>../03_Platform/platform_middleware/platform_filter.c</FilePath>
             </File>
+            <File>
+              <FileName>platform_pid.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../03_Platform/platform_middleware/platform_pid.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

@@ -8,7 +8,8 @@
  *
  * @author wuying <3553612993@qq.com>
  *
- * @brief Implement mecanum kinematics, the watchdog and dead reckoning.
+ * @brief Implement mecanum kinematics, four speed loops, the watchdog and
+ *        dead reckoning.
  *
  * Kinematics (x forward, y left, w CCW):
  *
@@ -18,12 +19,16 @@
  * with k = half_length + half_width (mm) and w in mrad/s, so k*w/1000 is a
  * wheel speed in mm/s and the whole calculation stays integral.
  *
+ * Each wheel has its own PID (platform_middleware/platform_pid). Encoder
+ * counts are sampled once per control tick and divided by the measured dt to
+ * obtain that wheel's speed; the PID output is the signed duty itself.
+ *
  * The 10 ms odometry uses float internally: four divisions per tick are cheap
  * on the M3, and integer accumulation of sub-millimetre distances would lose
  * the very motion we are trying to integrate. The protocol-facing values are
  * still integers.
  *
- * @version V1.0 2026-10-28
+ * @version V1.1 2026-10-29
  *
  * @note 1 tab == 4 spaces.
  *
@@ -32,6 +37,7 @@
 //******************************** Includes *********************************//
 
 #include "service_chassis.h"
+#include "platform_pid.h"
 
 #include <math.h>
 
@@ -40,6 +46,13 @@
 #define SERVICE_CHASSIS_PI          (3.14159265358979323846f)
 #define SERVICE_CHASSIS_TWO_PI      (2.0f * SERVICE_CHASSIS_PI)
 #define SERVICE_CHASSIS_RAD_TO_CD   (18000.0f / SERVICE_CHASSIS_PI)
+
+/*
+ * At rest with a zero target, discard the integral instead of letting it hold
+ * a small reverse duty. 5 mm/s is below one encoder count per 10 ms (about
+ * 4 mm/s), so this only triggers when the wheel is genuinely stopped.
+ */
+#define SERVICE_CHASSIS_ZERO_SPEED_EPS_MM_S ((float_t)5.0f)
 
 //******************************** Variables ********************************//
 
@@ -60,8 +73,22 @@ static struct
     /*
      * The platform hands out the cumulative encoder count. Integration needs
      * the step since the last sample, so keep the previous reading here.
+     * Odometry and the speed loops sample independently: both only read the
+     * cumulative value, so neither consumes the other's delta.
      */
     int32_t                     prev_counts[SERVICE_CHASSIS_WHEEL_COUNT];
+
+    /*
+     * Speed-loop state. apply() owns these fields; the enable/estop setters
+     * only flip the flags above, and apply() notices the transition.
+     */
+    platform_pid_t              pid[SERVICE_CHASSIS_WHEEL_COUNT];
+    int32_t                     pid_prev_counts[SERVICE_CHASSIS_WHEEL_COUNT];
+    int16_t                     measured_wheel_mm_s[SERVICE_CHASSIS_WHEEL_COUNT];
+    platform_bool_t             closed_loop;
+    platform_bool_t             pid_was_enabled;
+    platform_bool_t             pid_was_estopped;
+    platform_bool_t             pid_was_timed_out;
 
     int32_t                     x_mm;
     int32_t                     y_mm;
@@ -85,6 +112,74 @@ static int16_t service_chassis_clamp_i16(int32_t value)
     }
 
     return (int16_t)value;
+}
+
+/* Round half away from zero; a plain cast truncates sub-millimetre motion. */
+static int32_t service_chassis_round(float_t value)
+{
+    if (value >= 0.0f)
+    {
+        return (int32_t)(value + 0.5f);
+    }
+
+    return (int32_t)(value - 0.5f);
+}
+
+static int16_t service_chassis_clamp_speed(int32_t value, int16_t limit)
+{
+    if (limit <= 0)
+    {
+        return (int16_t)0;
+    }
+
+    if (value > (int32_t)limit)
+    {
+        return limit;
+    }
+
+    if (value < -(int32_t)limit)
+    {
+        return (int16_t)(-(int32_t)limit);
+    }
+
+    return (int16_t)value;
+}
+
+/* Round half away from zero; a truncating cast would add a small dead band. */
+static int16_t service_chassis_pid_duty(float_t duty)
+{
+    if (duty > (float_t)PLATFORM_MOTOR_DUTY_PERMILLE_MAX)
+    {
+        duty = (float_t)PLATFORM_MOTOR_DUTY_PERMILLE_MAX;
+    }
+    else if (duty < (float_t)PLATFORM_MOTOR_DUTY_PERMILLE_MIN)
+    {
+        duty = (float_t)PLATFORM_MOTOR_DUTY_PERMILLE_MIN;
+    }
+    else
+    {
+        /* Within range. */
+    }
+
+    return (int16_t)service_chassis_round(duty);
+}
+
+/*
+ * Clear every speed loop and re-read the encoders as the new zero step.
+ * Called from apply() and init only, so it cannot race with a PID update.
+ */
+static void service_chassis_reset_pid_state(void)
+{
+    uint8_t i;
+
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        platform_pid_reset(&s_chassis.pid[i]);
+        s_chassis.measured_wheel_mm_s[i] = 0;
+        s_chassis.pid_prev_counts[i] = 0;
+        (void)platform_motor_get_encoder(s_chassis.cfg.motor[i],
+                                         &s_chassis.pid_prev_counts[i]);
+    }
 }
 
 static int16_t service_chassis_duty(int16_t wheel_mm_s, int16_t max_mm_s)
@@ -143,6 +238,7 @@ void service_chassis_inverse_kinematics(int16_t vx_mm_s,
 
 platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg)
 {
+    platform_pid_cfg_t pid_cfg;
     uint8_t i;
 
     if (cfg == NULL)
@@ -153,14 +249,16 @@ platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg)
     if ((cfg->half_length_mm <= 0) || (cfg->half_width_mm <= 0) ||
         (cfg->max_vx_mm_s <= 0) || (cfg->max_vy_mm_s <= 0) ||
         (cfg->max_wz_mrad_s <= 0) || (cfg->max_wheel_mm_s <= 0) ||
-        (cfg->cmd_timeout_ms == 0u))
+        (cfg->counts_per_mm_x1000 < 0) || (cfg->cmd_timeout_ms == 0u))
     {
         return PLATFORM_ERR_PARAM;
     }
 
     for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
     {
-        if (cfg->motor[i] >= PLATFORM_MOTOR_ID_MAX)
+        if ((cfg->motor[i] >= PLATFORM_MOTOR_ID_MAX) ||
+            (cfg->pid_kp[i] < 0.0f) || (cfg->pid_ki[i] < 0.0f) ||
+            (cfg->pid_kd[i] < 0.0f))
         {
             return PLATFORM_ERR_PARAM;
         }
@@ -179,6 +277,31 @@ platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg)
     s_chassis.heading_rad = 0.0f;
     s_chassis.vl_mm_s = 0;
     s_chassis.vr_mm_s = 0;
+    s_chassis.closed_loop = (cfg->counts_per_mm_x1000 > 0)
+                                ? PLATFORM_TRUE : PLATFORM_FALSE;
+    s_chassis.pid_was_enabled = PLATFORM_FALSE;
+    s_chassis.pid_was_estopped = PLATFORM_FALSE;
+    s_chassis.pid_was_timed_out = PLATFORM_FALSE;
+
+    /*
+     * The PID output is the signed duty itself, so its limits are the motor
+     * limits. Per-wheel gains let a later calibration trim one wheel without
+     * changing the other three.
+     */
+    pid_cfg.output_min = (float_t)PLATFORM_MOTOR_DUTY_PERMILLE_MIN;
+    pid_cfg.output_max = (float_t)PLATFORM_MOTOR_DUTY_PERMILLE_MAX;
+
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        pid_cfg.kp = cfg->pid_kp[i];
+        pid_cfg.ki = cfg->pid_ki[i];
+        pid_cfg.kd = cfg->pid_kd[i];
+
+        if (platform_pid_init(&s_chassis.pid[i], &pid_cfg) != PLATFORM_ERR_OK)
+        {
+            return PLATFORM_ERR_PARAM;
+        }
+    }
 
     /* Prime the odometry baseline so the first step is not the whole count. */
     for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
@@ -187,6 +310,8 @@ platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg)
         (void)platform_motor_get_encoder(cfg->motor[i],
                                          &s_chassis.prev_counts[i]);
     }
+
+    service_chassis_reset_pid_state();
 
     s_chassis.initialized = PLATFORM_TRUE;
 
@@ -383,14 +508,16 @@ platform_err_t service_chassis_clear_estop(void)
     return PLATFORM_ERR_OK;
 }
 
-platform_bool_t service_chassis_apply(uint32_t now_ms)
+platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms)
 {
-    int16_t  wheel_mm_s[SERVICE_CHASSIS_WHEEL_COUNT];
+    int16_t  wheel_target[SERVICE_CHASSIS_WHEEL_COUNT];
     int16_t  vx;
     int16_t  vy;
     int16_t  wz;
     uint32_t age;
     platform_bool_t timed_out_now = PLATFORM_FALSE;
+    float_t  dt_s;
+    float_t  counts_to_mm;
     uint8_t  i;
 
     if (s_chassis.initialized == PLATFORM_FALSE)
@@ -398,11 +525,47 @@ platform_bool_t service_chassis_apply(uint32_t now_ms)
         return PLATFORM_FALSE;
     }
 
+    /*
+     * The control task owns the PID state. Reset it here on an enable/estop
+     * transition instead of doing it inside the setters, which run in the
+     * communication task and would race with a multi-byte float update.
+     */
+    if ((s_chassis.enabled != s_chassis.pid_was_enabled) ||
+        (s_chassis.estop != s_chassis.pid_was_estopped))
+    {
+        s_chassis.pid_was_enabled = s_chassis.enabled;
+        s_chassis.pid_was_estopped = s_chassis.estop;
+        service_chassis_reset_pid_state();
+    }
+
     if ((s_chassis.enabled == PLATFORM_FALSE) ||
         (s_chassis.estop == PLATFORM_TRUE))
     {
         s_chassis.timed_out = PLATFORM_FALSE;
+        s_chassis.pid_was_timed_out = PLATFORM_FALSE;
         return PLATFORM_FALSE;
+    }
+
+    /*
+     * The loops were frozen during a timeout. A valid frame has cleared the
+     * flag since the last tick, so restart from a fresh encoder baseline;
+     * otherwise the counts accumulated while waiting would look like a speed
+     * spike on the first update.
+     */
+    if (s_chassis.timed_out == PLATFORM_TRUE)
+    {
+        for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+        {
+            (void)platform_motor_set_duty(s_chassis.cfg.motor[i], 0);
+        }
+
+        return PLATFORM_FALSE;
+    }
+
+    if (s_chassis.pid_was_timed_out == PLATFORM_TRUE)
+    {
+        service_chassis_reset_pid_state();
+        s_chassis.pid_was_timed_out = PLATFORM_FALSE;
     }
 
     vx = s_chassis.target_vx_mm_s;
@@ -427,24 +590,98 @@ platform_bool_t service_chassis_apply(uint32_t now_ms)
             timed_out_now = PLATFORM_TRUE;
 
             (void)platform_motor_stop_all();
+            service_chassis_reset_pid_state();
         }
+
+        s_chassis.pid_was_timed_out = PLATFORM_TRUE;
+
+        for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+        {
+            (void)platform_motor_set_duty(s_chassis.cfg.motor[i], 0);
+        }
+
+        return timed_out_now;
     }
-    else
-    {
-        s_chassis.timed_out = PLATFORM_FALSE;
-    }
+
+    s_chassis.timed_out = PLATFORM_FALSE;
 
     service_chassis_inverse_kinematics(vx, vy, wz,
                                        (int16_t)(s_chassis.cfg.half_length_mm +
                                                  s_chassis.cfg.half_width_mm),
-                                       wheel_mm_s);
+                                       wheel_target);
 
-    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    if (dt_ms == 0u)
     {
-        (void)platform_motor_set_duty(
-                    s_chassis.cfg.motor[i],
-                    service_chassis_duty(wheel_mm_s[i],
-                                         s_chassis.cfg.max_wheel_mm_s));
+        dt_ms = 1u;
+    }
+
+    if (s_chassis.closed_loop == PLATFORM_TRUE)
+    {
+        dt_s = (float_t)dt_ms / 1000.0f;
+        counts_to_mm = 1000.0f / (float_t)s_chassis.cfg.counts_per_mm_x1000;
+
+        for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+        {
+            int32_t now_counts = s_chassis.pid_prev_counts[i];
+            int32_t delta_counts;
+            float_t measured_mm_s;
+            float_t duty;
+            int16_t target_mm_s;
+
+            /*
+             * A failed read contributes no motion rather than a fresh
+             * baseline, matching the odometry path.
+             */
+            (void)platform_motor_get_encoder(s_chassis.cfg.motor[i],
+                                             &now_counts);
+
+            delta_counts = (int32_t)((uint32_t)now_counts -
+                                     (uint32_t)s_chassis.pid_prev_counts[i]);
+            s_chassis.pid_prev_counts[i] = now_counts;
+
+            measured_mm_s = ((float_t)delta_counts * counts_to_mm) / dt_s;
+            s_chassis.measured_wheel_mm_s[i] =
+                service_chassis_clamp_i16(service_chassis_round(measured_mm_s));
+
+            target_mm_s = service_chassis_clamp_speed(
+                              (int32_t)wheel_target[i],
+                              s_chassis.cfg.max_wheel_mm_s);
+
+            if ((target_mm_s == 0) &&
+                (measured_mm_s <= SERVICE_CHASSIS_ZERO_SPEED_EPS_MM_S) &&
+                (measured_mm_s >= -SERVICE_CHASSIS_ZERO_SPEED_EPS_MM_S))
+            {
+                /*
+                 * Stopped at a zero target: do not let a negative integral
+                 * keep a reverse duty on the motor and make the wheel creep.
+                 */
+                platform_pid_reset(&s_chassis.pid[i]);
+                duty = 0.0f;
+            }
+            else
+            {
+                duty = platform_pid_update(&s_chassis.pid[i],
+                                           (float_t)target_mm_s,
+                                           measured_mm_s,
+                                           dt_s);
+            }
+
+            (void)platform_motor_set_duty(
+                        s_chassis.cfg.motor[i],
+                        service_chassis_pid_duty(duty));
+        }
+    }
+    else
+    {
+        /* No usable encoder scale: keep the old open-loop mapping. */
+        for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+        {
+            s_chassis.measured_wheel_mm_s[i] = 0;
+            (void)platform_motor_set_duty(
+                        s_chassis.cfg.motor[i],
+                        service_chassis_duty(wheel_target[i],
+                                             s_chassis.cfg.max_wheel_mm_s));
+        }
     }
 
     return timed_out_now;
@@ -504,10 +741,10 @@ void service_chassis_update_odometry(uint32_t dt_ms)
     /* Midpoint heading: second-order accurate and cheap. */
     h_mid = s_chassis.heading_rad + (d_theta * 0.5f);
 
-    s_chassis.x_mm += (int32_t)((dx_body * cosf(h_mid)) -
-                                (dy_body * sinf(h_mid)));
-    s_chassis.y_mm += (int32_t)((dx_body * sinf(h_mid)) +
-                                (dy_body * cosf(h_mid)));
+    s_chassis.x_mm += service_chassis_round((dx_body * cosf(h_mid)) -
+                                            (dy_body * sinf(h_mid)));
+    s_chassis.y_mm += service_chassis_round((dx_body * sinf(h_mid)) +
+                                            (dy_body * cosf(h_mid)));
 
     s_chassis.heading_rad += d_theta;
 
@@ -523,13 +760,15 @@ void service_chassis_update_odometry(uint32_t dt_ms)
 
     dt_s = (float)dt_ms / 1000.0f;
 
-    s_chassis.vl_mm_s = service_chassis_clamp_i16((int32_t)(
-        ((d_mm[SERVICE_CHASSIS_WHEEL_FL] + d_mm[SERVICE_CHASSIS_WHEEL_RL])
-         * 0.5f) / dt_s));
+    s_chassis.vl_mm_s = service_chassis_clamp_i16(
+        service_chassis_round(
+            ((d_mm[SERVICE_CHASSIS_WHEEL_FL] +
+              d_mm[SERVICE_CHASSIS_WHEEL_RL]) * 0.5f) / dt_s));
 
-    s_chassis.vr_mm_s = service_chassis_clamp_i16((int32_t)(
-        ((d_mm[SERVICE_CHASSIS_WHEEL_FR] + d_mm[SERVICE_CHASSIS_WHEEL_RR])
-         * 0.5f) / dt_s));
+    s_chassis.vr_mm_s = service_chassis_clamp_i16(
+        service_chassis_round(
+            ((d_mm[SERVICE_CHASSIS_WHEEL_FR] +
+              d_mm[SERVICE_CHASSIS_WHEEL_RR]) * 0.5f) / dt_s));
 }
 
 void service_chassis_get_odometry(service_chassis_odometry_t *out)
@@ -558,6 +797,22 @@ void service_chassis_get_odometry(service_chassis_odometry_t *out)
     out->heading_centi_deg = (int16_t)centi_deg;
     out->vl_mm_s = s_chassis.vl_mm_s;
     out->vr_mm_s = s_chassis.vr_mm_s;
+}
+
+void service_chassis_get_wheel_speeds(
+                    int16_t out_mm_s[SERVICE_CHASSIS_WHEEL_COUNT])
+{
+    uint8_t i;
+
+    if (out_mm_s == NULL)
+    {
+        return;
+    }
+
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        out_mm_s[i] = s_chassis.measured_wheel_mm_s[i];
+    }
 }
 
 platform_bool_t service_chassis_cmd_timed_out(void)

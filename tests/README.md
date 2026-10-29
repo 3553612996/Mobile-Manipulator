@@ -17,7 +17,7 @@ tests/
 | 测试 | 层级 | 被测模块 | 引入节点 | 依赖替身 |
 | --- | --- | --- | --- | --- |
 | [`unit/protocol/test_protocol_codec.c`](unit/protocol/test_protocol_codec.c) | L1 | `05_Middlewares/protocol` | M2 | 无 |
-| [`unit/platform/test_platform_middleware.c`](unit/platform/test_platform_middleware.c) | L1 | `platform_ringbuf` / `platform_crc` / `platform_filter` | M2 | 无 |
+| [`unit/platform/test_platform_middleware.c`](unit/platform/test_platform_middleware.c) | L1 | `platform_ringbuf` / `platform_crc` / `platform_filter` / `platform_pid` | M2（M3 加 PID） | 无 |
 | [`unit/service/test_service_proto.c`](unit/service/test_service_proto.c) | L1 | `02_Service/service_proto` | M2 | UART 内存管道 |
 | [`unit/service/test_service_chassis.c`](unit/service/test_service_chassis.c) | L1 | `02_Service/service_chassis` | M2（M3 继续用） | 电机桩函数 |
 | [`unit/service/test_service_key.c`](unit/service/test_service_key.c) | L1 | `02_Service/service_key` | M2 | 按键状态脚本 |

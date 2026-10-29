@@ -7,7 +7,7 @@
 | 服务 | 职责 | 关键接口 |
 | --- | --- | --- |
 | `service_key` | 按键去抖之上的短按/长按策略 | `service_key_init/update`，回调 `(id, event)` |
-| `service_chassis` | 麦轮逆运动学、200 ms 指令超时、使能/急停、开环占空比、里程计 | `forward/backward/strafe/rotate/set_velocity/stop/emergency_stop` |
+| `service_chassis` | 麦轮逆运动学、四轮速度 PID、200 ms 指令超时、使能/急停、里程计 | `forward/backward/strafe/rotate/set_velocity/stop/emergency_stop` |
 | `service_arm` | 六轴限位校验、目标跟踪、移动到舵机总线 | `set_joints/get_targets/get_states` |
 | `service_proto` | 串口协议实现：取字节、解帧、分发、ACK、SEQ 去重、上报组帧 | `process/register/send_*` |
 
@@ -44,8 +44,8 @@ app 只表达**意图**："前进"、"注册 SET_ENABLE 的处理函数"、"每 
 
 ```c
 service_chassis_set_velocity(vx, vy, wz, now_ms);   /* now_ms 由 app 提供 */
-service_chassis_apply(now_ms);                      /* 超时判定 */
-service_chassis_update_odometry(elapsed_ms);
+service_chassis_apply(now_ms, elapsed_ms);           /* 超时 + 四轮 PID */
+service_chassis_update_odometry(elapsed_ms);         /* 里程计积分 */
 service_key_update(elapsed_ms);
 ```
 
@@ -62,14 +62,33 @@ service_key_update(elapsed_ms);
 
 | 情况 | 行为 |
 | --- | --- |
-| 200 ms 没有新的有效速度帧 | 目标清零、`platform_motor_stop_all()`、`cmd_timed_out` 置位 |
+| 200 ms 没有新的有效速度帧 | 目标清零、`platform_motor_stop_all()`、`cmd_timed_out` 置位；PID 冻结在零输出并清积分，下一帧从新的编码器基线重启 |
 | `enable` / `emergency_stop` | 同时开关四路 H 桥（`platform_motor_set_enable`）。只写占空比不够——桥臂使能前 BSP 只记录数值、不输出 |
 | `emergency_stop` | 锁存急停、失能驱动、目标清零、四路桥臂 coast，直到 `clear_estop` |
 | `clear_estop` | 只解除锁存，**不自动使能**，必须重新 `SET_ENABLE` |
 | 关节越界 | 整帧拒绝，六个关节一个都不动 |
 | CRC 连续错误 ≥ 10 帧 | `service_proto_crc_alarm()` 置位，由 app 上报 |
 
-`platform_motor_get_encoder()` 返回的是**累计**计数（平台层文档就是这么定义的），BSP 内部用增量累加。里程计要的是两次采样之间的增量，所以服务自己保存 `prev_counts` 做差——把它当增量用，速度会随着累计值一直涨到 `int16` 饱和（真机上一脚 200 mm/s 会读成 32767）。
+`platform_motor_get_encoder()` 返回的是**累计**计数（平台层文档就是这么定义的），BSP 内部用增量累加。里程计和速度环要的都是两次采样之间的增量，所以各自保存上一拍计数做差——把它当增量用，速度会随着累计值一直涨到 `int16` 饱和（真机上一脚 200 mm/s 会读成 32767）。
+
+## 速度环
+
+`service_chassis_apply()` 每个控制周期做四件事：
+
+1. 用麦轮逆运动学把 `(vx, vy, wz)` 分解成四个轮速目标；
+2. 每个轮速目标限幅到 `max_wheel_mm_s`；
+3. 用编码器累计计数差除以 `dt_ms` 得到该轮实测速度；
+4. 每轮独立跑 `platform_pid_update()`，输出直接作为有符号占空比（`-1000..1000`）。
+
+PID 本体在 `03_Platform/platform_middleware/platform_pid`，服务只负责“目标从哪来、反馈从哪来、输出写到哪”。这样 PID 的数学可以在 PC 上单测，服务只做轮速编排。
+
+- 增益是**每轮独立**的，应用层当前按左/右两组初值填充；`APP_CHASSIS_LEFT/RIGHT_PID_*` 只是启动值，不是标定结果。
+- 积分采用条件积分抗饱和：输出已顶到限幅且误差还在往同一方向推时，不再累加积分。
+- 微分作用在测量值上，设定值阶跃不会产生微分冲击；当前 `Kd=0`，等编码器速度加滤波后再开。
+- `counts_per_mm_x1000 = 0` 时无法得到速度反馈，服务退回原来的开环占空比映射，避免“有 PID 但反馈恒为 0”把输出顶到满量程。
+- 使能/急停切换由控制任务在 `apply()` 里检测并复位 PID；不在通信任务里直接改 PID 状态，避免多字节浮点被并发写坏。
+- 超时期间 PID 冻结在零输出，超时解除后重新采样编码器基线，避免把等待期间累计的计数当成速度尖峰。
+- 目标为 0 且实测速度已低于 5 mm/s 时清积分、输出 0。否则刹车过程中积累的负积分会在停车后继续给反向占空比，轮子出现低速蠕动；5 mm/s 低于 10 ms 内一个编码器计数对应的约 4 mm/s，不会误判正常运动。
 
 ## PC 单测
 
@@ -78,9 +97,11 @@ gcc -std=c99 -Wall -Wextra \
     -I firmware/app/03_Platform/platform_common \
     -I firmware/app/04_Impl \
     -I firmware/app/03_Platform/platform_bsp \
+    -I firmware/app/03_Platform/platform_middleware \
     -I firmware/app/02_Service/service_chassis \
     tests/unit/service/test_service_chassis.c \
     firmware/app/02_Service/service_chassis/service_chassis.c \
+    firmware/app/03_Platform/platform_middleware/platform_pid.c \
     -o build/test_service_chassis -lm
 
 gcc -std=c99 -Wall -Wextra \

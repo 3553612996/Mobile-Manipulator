@@ -10,9 +10,11 @@
  *       -I firmware/app/03_Platform/platform_common \
  *       -I firmware/app/04_Impl \
  *       -I firmware/app/03_Platform/platform_bsp \
+ *       -I firmware/app/03_Platform/platform_middleware \
  *       -I firmware/app/02_Service/service_chassis \
  *       tests/unit/service/test_service_chassis.c \
  *       firmware/app/02_Service/service_chassis/service_chassis.c \
+ *       firmware/app/03_Platform/platform_middleware/platform_pid.c \
  *       -o build/test_service_chassis -lm
  */
 
@@ -85,8 +87,9 @@ platform_err_t platform_motor_get_encoder(platform_motor_id_t id,
 
 /* ------------------------------ fixtures ------------------------------ */
 
-#define TEST_TIMEOUT_MS     ((uint32_t)200u)
-#define TEST_MAX_WHEEL      ((int16_t)500)
+#define TEST_TIMEOUT_MS         ((uint32_t)200u)
+#define TEST_MAX_WHEEL          ((int16_t)500)
+#define TEST_COUNTS_PER_MM_X1000 ((int32_t)24828)
 
 static service_chassis_cfg_t make_cfg(void)
 {
@@ -102,10 +105,30 @@ static service_chassis_cfg_t make_cfg(void)
     cfg.max_vy_mm_s = 500;
     cfg.max_wz_mrad_s = 1500;
     cfg.max_wheel_mm_s = TEST_MAX_WHEEL;
-    cfg.counts_per_mm_x1000 = 22918;
+    cfg.counts_per_mm_x1000 = TEST_COUNTS_PER_MM_X1000;
     cfg.cmd_timeout_ms = TEST_TIMEOUT_MS;
 
+    /*
+     * Pure P here, so the expected duty is exactly Kp * error and the test
+     * does not depend on the application's tuning. Kp = 2 maps a 200 mm/s
+     * error to the same 400 permille the old open-loop mapping produced.
+     */
+    for (uint8_t i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        cfg.pid_kp[i] = 2.0f;
+        cfg.pid_ki[i] = 0.0f;
+        cfg.pid_kd[i] = 0.0f;
+    }
+
     return cfg;
+}
+
+static void reset_motor_stubs(void)
+{
+    memset(g_duty, 0, sizeof(g_duty));
+    memset(g_encoder, 0, sizeof(g_encoder));
+    memset(g_bridge, 0, sizeof(g_bridge));
+    g_stop_all_calls = 0;
 }
 
 /* ---------------------------- kinematics ------------------------------ */
@@ -141,13 +164,14 @@ static void test_enable_and_duty(void)
 {
     service_chassis_cfg_t cfg = make_cfg();
 
+    reset_motor_stubs();
     CHECK(service_chassis_init(&cfg) == PLATFORM_ERR_OK, "init");
     CHECK(service_chassis_is_enabled() == PLATFORM_FALSE, "disabled at boot");
 
     /* Moving while disabled must not produce duty. */
     CHECK(service_chassis_set_velocity(200, 0, 0, 10u) == PLATFORM_ERR_OK,
           "set velocity while disabled");
-    CHECK(service_chassis_apply(20u) == PLATFORM_FALSE, "no timeout edge");
+    CHECK(service_chassis_apply(20u, 10u) == PLATFORM_FALSE, "no timeout edge");
     CHECK(g_duty[0] == 0 && g_duty[1] == 0 &&
           g_duty[2] == 0 && g_duty[3] == 0, "no duty while disabled");
 
@@ -160,8 +184,8 @@ static void test_enable_and_duty(void)
     CHECK(service_chassis_set_velocity(200, 0, 0, 110u) == PLATFORM_ERR_OK,
           "forward target");
 
-    (void)service_chassis_apply(120u);
-    /* 200 mm/s of 500 mm/s full scale -> 400 permille. */
+    (void)service_chassis_apply(120u, 10u);
+    /* Measured speed is zero, Kp = 2, target 200 -> 400 permille. */
     CHECK(g_duty[0] == 400 && g_duty[1] == 400 &&
           g_duty[2] == 400 && g_duty[3] == 400, "duty from target");
 }
@@ -176,7 +200,7 @@ static void test_velocity_limits(void)
           PLATFORM_ERR_PARAM, "wz over limit");
 
     /* A rejected frame must leave the previous target untouched. */
-    (void)service_chassis_apply(210u);
+    (void)service_chassis_apply(210u, 10u);
     CHECK(g_duty[0] == 400, "previous target kept after reject");
 }
 
@@ -185,18 +209,25 @@ static void test_timeout(void)
     CHECK(service_chassis_cmd_timed_out() == PLATFORM_FALSE, "not timed out");
 
     /* 110 ms + 200 ms + 1: the watchdog fires on this apply. */
-    CHECK(service_chassis_apply(311u) == PLATFORM_TRUE, "timeout edge");
+    CHECK(service_chassis_apply(311u, 10u) == PLATFORM_TRUE, "timeout edge");
     CHECK(service_chassis_cmd_timed_out() == PLATFORM_TRUE, "timeout latched");
     CHECK(g_duty[0] == 0 && g_duty[1] == 0 &&
           g_duty[2] == 0 && g_duty[3] == 0, "wheels stopped");
 
     /* The edge must not repeat every control tick. */
-    CHECK(service_chassis_apply(321u) == PLATFORM_FALSE, "edge once");
+    CHECK(service_chassis_apply(321u, 10u) == PLATFORM_FALSE, "edge once");
 
     /* A fresh frame clears the timeout. */
     CHECK(service_chassis_set_velocity(0, 0, 0, 330u) == PLATFORM_ERR_OK,
           "refresh");
     CHECK(service_chassis_cmd_timed_out() == PLATFORM_FALSE, "timeout cleared");
+
+    /* The loops restart from a fresh encoder baseline, not a stale delta. */
+    CHECK(service_chassis_set_velocity(200, 0, 0, 330u) == PLATFORM_ERR_OK,
+          "target after timeout");
+    CHECK(service_chassis_apply(330u, 10u) == PLATFORM_FALSE,
+          "no second timeout edge");
+    CHECK(g_duty[0] == 400, "PID restarts from zero measured speed");
 }
 
 static void test_emergency_stop(void)
@@ -220,6 +251,118 @@ static void test_emergency_stop(void)
           "clear does not re-enable");
 }
 
+/* ----------------------------- speed loop ------------------------------ */
+
+static void test_speed_feedback(void)
+{
+    service_chassis_cfg_t cfg = make_cfg();
+    int16_t speeds[SERVICE_CHASSIS_WHEEL_COUNT];
+    uint8_t i;
+
+    reset_motor_stubs();
+    CHECK(service_chassis_init(&cfg) == PLATFORM_ERR_OK, "speed init");
+    CHECK(service_chassis_enable(PLATFORM_TRUE, 0u) == PLATFORM_ERR_OK,
+          "speed enable");
+
+    /* Consume the enable transition before feeding motion. */
+    (void)service_chassis_apply(0u, 10u);
+    CHECK(g_duty[0] == 0, "zero target before the first frame");
+
+    CHECK(service_chassis_set_velocity(200, 0, 0, 10u) == PLATFORM_ERR_OK,
+          "speed target");
+    (void)service_chassis_apply(10u, 10u);
+    CHECK(g_duty[0] == 400, "no feedback yet: P drives 400");
+
+    /*
+     * 100 mm/s for 10 ms = 1 mm = 24828 / 1000 counts on every wheel.
+     * The measured speed is therefore about 100.7 mm/s, so the error drops
+     * and the P output must drop from 400 to about 199, not stay open-loop.
+     */
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        g_encoder[i] += 25;
+    }
+
+    (void)service_chassis_apply(20u, 10u);
+    CHECK((g_duty[0] >= 197) && (g_duty[0] <= 201),
+          "feedback reduces the duty");
+    CHECK(g_duty[1] == g_duty[0] && g_duty[2] == g_duty[0] &&
+          g_duty[3] == g_duty[0], "all four loops see the same motion");
+
+    service_chassis_get_wheel_speeds(speeds);
+    CHECK((speeds[0] >= 100) && (speeds[0] <= 101),
+          "per-wheel speed is reported");
+    CHECK(speeds[1] == speeds[0] && speeds[2] == speeds[0] &&
+          speeds[3] == speeds[0], "per-wheel speeds match");
+}
+
+static void test_pid_reset_on_enable(void)
+{
+    service_chassis_cfg_t cfg = make_cfg();
+    uint8_t i;
+
+    reset_motor_stubs();
+
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        cfg.pid_kp[i] = 0.0f;
+        cfg.pid_ki[i] = 1.0f;
+        cfg.pid_kd[i] = 0.0f;
+    }
+
+    CHECK(service_chassis_init(&cfg) == PLATFORM_ERR_OK, "integral init");
+    CHECK(service_chassis_enable(PLATFORM_TRUE, 0u) == PLATFORM_ERR_OK,
+          "integral enable");
+
+    (void)service_chassis_apply(0u, 10u);
+    CHECK(service_chassis_set_velocity(200, 0, 0, 10u) == PLATFORM_ERR_OK,
+          "integral target");
+
+    (void)service_chassis_apply(10u, 10u);
+    CHECK(g_duty[0] == 2, "first integral step");
+    (void)service_chassis_apply(20u, 10u);
+    CHECK(g_duty[0] == 4, "integral accumulates");
+
+    /* A zero target at rest must drop the integral instead of creeping. */
+    CHECK(service_chassis_set_velocity(0, 0, 0, 25u) == PLATFORM_ERR_OK,
+          "zero target");
+    (void)service_chassis_apply(25u, 10u);
+    CHECK(g_duty[0] == 0, "zero target at rest clears the integral");
+
+    /* Disable/re-enable must not resume from the old integral. */
+    CHECK(service_chassis_enable(PLATFORM_FALSE, 30u) == PLATFORM_ERR_OK,
+          "disable");
+    (void)service_chassis_apply(30u, 10u);
+    CHECK(service_chassis_enable(PLATFORM_TRUE, 40u) == PLATFORM_ERR_OK,
+          "re-enable");
+    CHECK(service_chassis_set_velocity(200, 0, 0, 40u) == PLATFORM_ERR_OK,
+          "target after re-enable");
+    (void)service_chassis_apply(40u, 10u);
+    CHECK(g_duty[0] == 2, "enable transition clears the integral");
+}
+
+static void test_open_loop_fallback(void)
+{
+    service_chassis_cfg_t cfg = make_cfg();
+    int16_t speeds[SERVICE_CHASSIS_WHEEL_COUNT];
+
+    reset_motor_stubs();
+    cfg.counts_per_mm_x1000 = 0;
+
+    CHECK(service_chassis_init(&cfg) == PLATFORM_ERR_OK, "fallback init");
+    CHECK(service_chassis_enable(PLATFORM_TRUE, 0u) == PLATFORM_ERR_OK,
+          "fallback enable");
+    (void)service_chassis_apply(0u, 10u);
+
+    CHECK(service_chassis_set_velocity(200, 0, 0, 10u) == PLATFORM_ERR_OK,
+          "fallback target");
+    (void)service_chassis_apply(10u, 10u);
+    CHECK(g_duty[0] == 400, "open-loop duty when counts_per_mm is 0");
+
+    service_chassis_get_wheel_speeds(speeds);
+    CHECK(speeds[0] == 0, "no wheel speed without feedback");
+}
+
 /* ------------------------------ odometry ------------------------------- */
 
 static void test_odometry(void)
@@ -227,13 +370,14 @@ static void test_odometry(void)
     service_chassis_cfg_t cfg = make_cfg();
     service_chassis_odometry_t odom;
 
+    reset_motor_stubs();
     (void)service_chassis_init(&cfg);
 
-    /* Four wheels, 22918 counts = 1000 mm of travel each. */
-    g_encoder[0] = 22918;
-    g_encoder[1] = 22918;
-    g_encoder[2] = 22918;
-    g_encoder[3] = 22918;
+    /* Four wheels, 24828 counts = 1000 mm of travel each. */
+    g_encoder[0] = TEST_COUNTS_PER_MM_X1000;
+    g_encoder[1] = TEST_COUNTS_PER_MM_X1000;
+    g_encoder[2] = TEST_COUNTS_PER_MM_X1000;
+    g_encoder[3] = TEST_COUNTS_PER_MM_X1000;
     service_chassis_update_odometry(1000u);
 
     service_chassis_get_odometry(&odom);
@@ -262,6 +406,9 @@ int main(void)
     test_velocity_limits();
     test_timeout();
     test_emergency_stop();
+    test_speed_feedback();
+    test_pid_reset_on_enable();
+    test_open_loop_fallback();
     test_odometry();
 
     if (g_failed != 0)

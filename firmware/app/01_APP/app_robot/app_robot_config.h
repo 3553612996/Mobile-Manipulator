@@ -14,13 +14,14 @@
  * the services. The services validate against these limits; they never guess
  * geometry.
  *
- * TODO(measure): half_length / half_width / counts_per_mm. The values below
- * come from the C25 V2.4 drawing and a 60 mm mecanum wheel with the 1:90
- * gearbox; a ruler test on the assembled robot is still required. Odometry
- * scales linearly with counts_per_mm, so a wrong value shows up as a constant
- * distance error, not as drift.
+ * TODO(measure): half_length / half_width / counts_per_mm / PID gains. The
+ * geometry values come from the C25 V2.4 drawing and a 60 mm mecanum wheel
+ * with the 1:90 gearbox; a ruler test on the assembled robot is still
+ * required. Odometry scales linearly with counts_per_mm, so a wrong value
+ * shows up as a constant distance error, not as drift. The PID gains are only
+ * a conservative starting point until the tyres are fitted.
  *
- * @version V1.0 2026-10-28
+ * @version V1.1 2026-10-29
  *
  * @note 1 tab == 4 spaces.
  *
@@ -60,14 +61,36 @@
 #define APP_CHASSIS_MAX_VY_MM_S         ((int16_t)500)
 #define APP_CHASSIS_MAX_WZ_MRAD_S       ((int16_t)1500)
 
-/* Wheel speed that maps to +-1000 permille in the open-loop placeholder. */
+/* Wheel-speed limit; also the full scale if speed feedback is unavailable. */
 #define APP_CHASSIS_MAX_WHEEL_MM_S      ((int16_t)500)
+
+/*
+ * Speed-loop starting gains. These are NOT calibration results: the tyres are
+ * not fitted yet and the gearbox load is unknown. They are deliberately
+ * conservative so the first bench run does not oscillate. Tune on the real
+ * chassis and record the values in docs/nodes/m3/test-report.md.
+ *
+ * Kd stays at 0 until the encoder speed is filtered; differentiating a 10 ms
+ * speed sample mostly amplifies quantization noise.
+ */
+#define APP_CHASSIS_LEFT_PID_KP         ((float_t)1.0f)
+#define APP_CHASSIS_LEFT_PID_KI         ((float_t)0.6f)
+#define APP_CHASSIS_LEFT_PID_KD         ((float_t)0.0f)
+
+#define APP_CHASSIS_RIGHT_PID_KP        ((float_t)1.0f)
+#define APP_CHASSIS_RIGHT_PID_KI        ((float_t)0.6f)
+#define APP_CHASSIS_RIGHT_PID_KD        ((float_t)0.0f)
 
 #define APP_CHASSIS_CMD_TIMEOUT_MS      ((uint32_t)200u)
 
 /* ------------------------------- Timing --------------------------------- */
 
 #define APP_COMM_PERIOD_MS              ((uint32_t)10u)
+/*
+ * Speed loop at 10 ms. At 1 ms one encoder count is about 40 mm/s, which is
+ * too coarse for PID feedback without a filter; 10 ms also keeps the float
+ * odometry and four loops comfortably inside the control task budget.
+ */
 #define APP_CONTROL_PERIOD_MS           ((uint32_t)10u)
 #define APP_ODOM_PERIOD_MS              ((uint32_t)20u)    /* 50 Hz. */
 #define APP_ARM_PERIOD_MS               ((uint32_t)50u)    /* 20 Hz. */

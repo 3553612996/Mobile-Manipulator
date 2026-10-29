@@ -7,6 +7,7 @@
  * - platform_ringbuf.h
  * - platform_crc.h
  * - platform_filter.h
+ * - platform_pid.h
  *
  * @author wuying <3553612993@qq.com>
  *
@@ -29,5 +30,6 @@
 #include "platform_ringbuf.h"
 #include "platform_crc.h"
 #include "platform_filter.h"
+#include "platform_pid.h"
 
 #endif /* __PLATFORM_MIDDLEWARE_H__ */

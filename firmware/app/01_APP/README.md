@@ -29,7 +29,7 @@ main()
 | 任务 | 优先级 | 周期 | 做什么 |
 | --- | --- | --- | --- |
 | `appComm` | HIGH | 10 ms 或 UART 事件唤醒 | `service_proto_process()`：解析、回调、ACK；故障判定；上报 ODOM/ARM/STATUS/HEARTBEAT |
-| `appCtrl` | ABOVE_NORMAL | 10 ms | `service_key_update()`、`service_chassis_apply()`（超时停车）、里程计积分、蜂鸣器 |
+| `appCtrl` | ABOVE_NORMAL | 10 ms | `service_key_update()`、`service_chassis_apply()`（超时停车 + 四轮速度 PID）、里程计积分、蜂鸣器 |
 
 **只有 `appComm` 发送串口数据**。控制任务要上报时（例如按键长按急停）置一个 `s_pending_estop` 标志，由通信任务变成事件帧，避免两个任务同时调用阻塞发送。
 
@@ -87,7 +87,8 @@ main()
 
 - `APP_CHASSIS_HALF_LENGTH_MM` / `APP_CHASSIS_HALF_WIDTH_MM`：影响旋转解算与里程计航向；
 - `APP_CHASSIS_COUNTS_PER_MM_X1000`：按 13 线 × 4 倍频 × 90 减速比 / (π × 60 mm) = 24828 计算，轮径变了要重算；
-- `APP_CHASSIS_MAX_WHEEL_MM_S`：开环占空比的满量程，换成闭环后由 PID 取代。
+- `APP_CHASSIS_MAX_WHEEL_MM_S`：轮速目标上限；`counts_per_mm_x1000 = 0` 时也是开环回退的满量程；
+- `APP_CHASSIS_LEFT/RIGHT_PID_*`：速度环启动增益，**不是标定结果**。轮胎未装、负载未知，先在台架上整定，再把实测值写回 `docs/nodes/m3/test-report.md`。
 
 ## 依赖方向
 

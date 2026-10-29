@@ -94,7 +94,8 @@ ros2_ws/src/
 | 启动 | `main.c` | HAL 初始化、外设初始化、`osKernelStart()` | 全部 |
 | 任务 | `app_freertos.c`（CubeMX 生成的 `freertos.c`） | 创建五个任务与队列、挂接任务函数 | FreeRTOS |
 | 协议 | `shared/protocol.c` | 帧解析、组帧、CRC | 无（纯 C） |
-| 电机 | `motor.c` | PWM 输出、编码器读取、PID | bsp |
+| 电机驱动 | `bsp_motor_dual_pwm.c` | PWM 输出、编码器增量累加 | platform_mcu_pwm / encoder |
+| 速度环 | `service_chassis.c` + `platform_pid.c` | 四轮目标、PID、限速、占空比 | platform_bsp_motor、platform_pid |
 | 关节 | `servo.c` | 舵机总线指令、插补 | bsp |
 | 安全 | `safety.c` | 超时、过流、限位、急停 | motor, servo |
 | 故障 | `fault.c` | 故障码置位/清除/上报 | 无 |

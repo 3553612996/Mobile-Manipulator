@@ -29,9 +29,9 @@
 | --- | --- | --- |
 | `tests/unit/protocol/test_protocol_codec.c` | `05_Middlewares/protocol`：协议表、组帧、解帧、CRC | 无（只需 gcc） |
 | `tests/unit/service/test_service_proto.c` | `02_Service/service_proto`：分发、ACK、SEQ 去重、上报组帧 | UART 用内存管道替身 |
-| `tests/unit/service/test_service_chassis.c` | `02_Service/service_chassis`：麦轮解算、超时、急停、里程计 | 电机用桩函数替身 |
+| `tests/unit/service/test_service_chassis.c` | `02_Service/service_chassis`：麦轮解算、四轮速度环、超时、急停、里程计 | 电机用桩函数替身 |
 | `tests/unit/service/test_service_key.c` | `02_Service/service_key`：短按/长按策略 | 按键用脚本状态替身 |
-| `tests/unit/platform/test_platform_middleware.c` | 环形缓冲、CRC、滤波 | 无 |
+| `tests/unit/platform/test_platform_middleware.c` | 环形缓冲、CRC、滤波、PID | 无 |
 
 **测不了的**：`impl_mcu_*.c`、`impl_bsp_*.c`、`bsp_*.c`——它们直接操作寄存器和 HAL。
 

@@ -9,6 +9,7 @@
 | `platform_ringbuf.h/.c` | 单生产者/单消费者字节环形缓冲区 |
 | `platform_crc.h/.c` | CRC-16/CCITT-FALSE |
 | `platform_filter.h/.c` | 滑动平均、一阶低通滤波 |
+| `platform_pid.h/.c` | 位置式 PID，微分测量值、条件积分抗饱和 |
 | `platform_middleware.h` | 聚合头 |
 
 ## 依赖方向
@@ -104,6 +105,29 @@ float_t smoothed = platform_filter_lowpass_update(&filter, raw);
 - 第一个样本直接作为初值，避免从 0 爬升的启动瞬态；
 - 状态不是线程安全的，一个实例只归一个任务所有。
 
+## PID
+
+```c
+static platform_pid_t speed_pid;
+
+platform_pid_cfg_t cfg = {
+    .kp = 1.0f, .ki = 0.6f, .kd = 0.0f,
+    .output_min = -1000.0f, .output_max = 1000.0f
+};
+platform_pid_init(&speed_pid, &cfg);
+
+float_t duty = platform_pid_update(&speed_pid, target_mm_s,
+                                   measured_mm_s, 0.01f);
+```
+
+- 位置式 PID：`u = Kp*e + Ki*∫e dt + Kd*d(measurement)/dt`；
+- 微分作用在**测量值**上，设定值阶跃不会产生微分冲击；
+- 条件积分抗饱和：输出顶到限幅且误差继续往同方向推时，本拍不累加积分；
+- 第一个 `update` 没有历史测量值，跳过微分；
+- 输入 `dt_s <= 0`、未初始化或空句柄时返回 0，不改变状态；
+- 增益必须 ≥ 0，输出上限必须大于下限；
+- 状态由调用方持有，不做内存分配，也不是线程安全的。
+
 ## PC 单测编译
 
 ```bash
@@ -114,6 +138,7 @@ gcc -std=c99 -Wall -Wextra -Werror \
     firmware/app/03_Platform/platform_middleware/platform_ringbuf.c \
     firmware/app/03_Platform/platform_middleware/platform_crc.c \
     firmware/app/03_Platform/platform_middleware/platform_filter.c \
+    firmware/app/03_Platform/platform_middleware/platform_pid.c \
     tests/unit/platform/test_platform_middleware.c \
     -o build/test_platform_middleware
 

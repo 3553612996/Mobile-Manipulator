@@ -547,7 +547,7 @@ static void app_control_task_entry(void *argument)
 
         (void)service_key_update(elapsed_ms);
 
-        (void)service_chassis_apply(now_ms);
+        (void)service_chassis_apply(now_ms, elapsed_ms);
         service_chassis_update_odometry(elapsed_ms);
 
         {
@@ -624,6 +624,23 @@ platform_err_t app_robot_init(void)
     chassis_cfg.max_wheel_mm_s = APP_CHASSIS_MAX_WHEEL_MM_S;
     chassis_cfg.counts_per_mm_x1000 = APP_CHASSIS_COUNTS_PER_MM_X1000;
     chassis_cfg.cmd_timeout_ms = APP_CHASSIS_CMD_TIMEOUT_MS;
+
+    for (i = 0u; i < SERVICE_CHASSIS_WHEEL_COUNT; i++)
+    {
+        platform_bool_t is_left =
+            ((i == SERVICE_CHASSIS_WHEEL_FL) ||
+             (i == SERVICE_CHASSIS_WHEEL_RL)) ? PLATFORM_TRUE : PLATFORM_FALSE;
+
+        chassis_cfg.pid_kp[i] = (is_left == PLATFORM_TRUE)
+                                    ? APP_CHASSIS_LEFT_PID_KP
+                                    : APP_CHASSIS_RIGHT_PID_KP;
+        chassis_cfg.pid_ki[i] = (is_left == PLATFORM_TRUE)
+                                    ? APP_CHASSIS_LEFT_PID_KI
+                                    : APP_CHASSIS_RIGHT_PID_KI;
+        chassis_cfg.pid_kd[i] = (is_left == PLATFORM_TRUE)
+                                    ? APP_CHASSIS_LEFT_PID_KD
+                                    : APP_CHASSIS_RIGHT_PID_KD;
+    }
 
     err = service_chassis_init(&chassis_cfg);
     if (PLATFORM_IS_ERR(err))

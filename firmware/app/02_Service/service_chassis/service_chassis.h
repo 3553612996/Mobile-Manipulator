@@ -20,7 +20,7 @@
  *   - the mecanum inverse kinematics,
  *   - target validation and the 200 ms command timeout,
  *   - enable/disable and the latched emergency stop,
- *   - open-loop duty application (the speed PID will replace only this part),
+ *   - four independent wheel-speed loops (PID) on the encoder feedback,
  *   - dead-reckoning odometry from the four encoders.
  *
  * Coordinate frame (REP-103 style, flat floor):
@@ -30,7 +30,7 @@
  * Time is injected (now_ms from the caller's millisecond clock) so the timeout
  * logic is testable on a PC and has no hidden dependency on the scheduler.
  *
- * @version V1.0 2026-10-28
+ * @version V1.1 2026-10-29
  *
  * @note 1 tab == 4 spaces.
  *
@@ -67,10 +67,25 @@ typedef struct
     int16_t             max_vy_mm_s;
     int16_t             max_wz_mrad_s;
 
-    /* Wheel speed that corresponds to +-1000 permille (open-loop only). */
+    /*
+     * Wheel-speed limit. It caps each wheel target and is also the full scale
+     * of the open-loop fallback used when counts_per_mm_x1000 is 0.
+     */
     int16_t             max_wheel_mm_s;
 
-    /* Encoder counts per millimetre, multiplied by 1000. 0 disables odometry. */
+    /*
+     * Per-wheel speed-loop gains. They are arrays so one wheel can be tuned
+     * without changing the others; the application normally starts with the
+     * same values for the left and right pairs. Gains must be >= 0.
+     */
+    float_t             pid_kp[SERVICE_CHASSIS_WHEEL_COUNT];
+    float_t             pid_ki[SERVICE_CHASSIS_WHEEL_COUNT];
+    float_t             pid_kd[SERVICE_CHASSIS_WHEEL_COUNT];
+
+    /*
+     * Encoder counts per millimetre, multiplied by 1000. 0 disables odometry
+     * and makes the chassis fall back to open-loop duty.
+     */
     int32_t             counts_per_mm_x1000;
 
     uint32_t            cmd_timeout_ms;         /* 200 ms per protocol. */
@@ -116,16 +131,28 @@ void service_chassis_emergency_stop(void);
 platform_err_t service_chassis_clear_estop(void);
 
 /*
- * Safety watchdog. Call at the control period (10 ms). Stops the wheels when
- * the last accepted velocity frame is older than cmd_timeout_ms.
+ * One control tick: run the safety watchdog, update the four speed loops from
+ * the encoders and write the motor duty. Call at the control period (10 ms).
+ * dt_ms is the interval since the previous call and must be non-zero.
  * Returns PLATFORM_TRUE on the tick the timeout becomes active.
+ *
+ * While the command timeout is active the loops are held at zero and the
+ * integral is kept reset; a fresh valid frame restarts them from a new
+ * encoder baseline.
  */
-platform_bool_t service_chassis_apply(uint32_t now_ms);
+platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms);
 
 /* Integrate one encoder interval. Call at the odometry period (10 ms). */
 void service_chassis_update_odometry(uint32_t dt_ms);
 
 void service_chassis_get_odometry(service_chassis_odometry_t *out);
+
+/*
+ * Last measured per-wheel speed in FL, FR, RL, RR order. Valid after apply();
+ * all zeros when speed feedback is unavailable (open-loop fallback).
+ */
+void service_chassis_get_wheel_speeds(
+                    int16_t out_mm_s[SERVICE_CHASSIS_WHEEL_COUNT]);
 
 /* TRUE while the command timeout is active (since the last valid frame). */
 platform_bool_t service_chassis_cmd_timed_out(void);
