@@ -62,12 +62,15 @@ cd mobile_manipulator_ws
 colcon build --symlink-install
 source install/setup.sh
 
-# 3. 启动
-ros2 launch robot_bringup lidar.launch.py
+# 3. 启动（PC 上 port 用实际设备；rviz:=true 同时打开 RViz2）
+ros2 launch robot_bringup lidar.launch.py port:=/dev/ttyUSB0 rviz:=true
 
-# 4. RViz2：Fixed Frame 选 laser_link，Add -> LaserScan /scan
-#    或 Add -> PointCloud2 /lidar/points
+# 只启动驱动、不打开 RViz：
+ros2 launch robot_bringup lidar.launch.py port:=/dev/ttyUSB0
 ```
+
+`rviz:=true` 会加载 `config/lidar.rviz`：Fixed Frame `laser_link`，俯视视角，
+已添加 `/lidar/points`（PointCloud2）和 `/scan`（LaserScan）两个显示。
 
 如果转接板不是 CP2102（例如 CH340），udev 规则不会匹配；把 `lidar.yaml` 的 `port` 改成实际设备即可。当前 PC 测试用的就是 CH340 转接板，直接用了 `/dev/ttyUSB0`。
 
