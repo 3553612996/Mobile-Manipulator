@@ -34,6 +34,12 @@ class Cmd(IntEnum):
     SET_PARAM = 0x05
     ESTOP = 0x06
     CLEAR_FAULT = 0x07
+    PARAM_SAVE = 0x08
+    PARAM_RESET = 0x09
+    STORAGE_QUERY = 0x0A
+    LOG_EXPORT = 0x0B
+    CRASH_READ = 0x0C
+    LOG_CLEAR = 0x0D
 
 
 class Report(IntEnum):
@@ -46,6 +52,9 @@ class Report(IntEnum):
     HEARTBEAT = 0xC5
     WHEEL_SPEED = 0xC6
     WHEEL_DUTY = 0xC7
+    STORAGE = 0xC8
+    LOG = 0xC9
+    CRASH = 0xCA
 
 
 class Result(IntEnum):
@@ -54,6 +63,8 @@ class Result(IntEnum):
     BAD_STATE = 0x02
     UNKNOWN_CMD = 0x03
     FAILED = 0x04
+    BUSY = 0x05
+    STORAGE_UNAVAILABLE = 0x06
 
 
 RESULT_NAMES = {
@@ -62,6 +73,8 @@ RESULT_NAMES = {
     Result.BAD_STATE: "当前状态不允许",
     Result.UNKNOWN_CMD: "未知命令",
     Result.FAILED: "执行失败",
+    Result.BUSY: "忙",
+    Result.STORAGE_UNAVAILABLE: "存储不可用",
 }
 
 # Provisional until protocol.md fixes the REPORT_STATUS state enum; unknown
@@ -86,6 +99,10 @@ FAULT_NAMES = {
     0x0401: "电池低压",
     0x0402: "温度过高",
     0x0501: "急停触发",
+    0x0601: "参数区无效",
+    0x0602: "标定区无效",
+    0x0603: "存储写入失败",
+    0x0604: "分区表/镜像无效",
 }
 
 PARAM_NAMES = {
@@ -100,6 +117,8 @@ PARAM_NAMES = {
     0x10: "控制超时",
     0x11: "最大线速度",
     0x12: "最大角速度",
+    0x40: "日志等级",
+    0x41: "死区补偿开关",
 }
 
 # A/B/C/D = FL/FR/RL/RR. One gain id per wheel, value = gain * 1000.
@@ -118,6 +137,25 @@ for _wheel, _ids in enumerate(PID_PARAM_IDS):
 TEST_DUTY_IDS = (0x30, 0x31, 0x32, 0x33)
 for _wheel, _id in enumerate(TEST_DUTY_IDS):
     PARAM_NAMES[_id] = f"{WHEEL_NAMES[_wheel]} 测试占空比"
+
+# Calibration ids: these live in the calibration region, everything else in
+# the parameter region. Restoring defaults must not touch these.
+CALIB_PARAM_IDS = (0x01, 0x02) + tuple(range(0x50, 0x60))
+for _wheel in range(4):
+    PARAM_NAMES[0x50 + _wheel] = f"{WHEEL_NAMES[_wheel]} 编码器比例"
+    PARAM_NAMES[0x54 + _wheel] = f"{WHEEL_NAMES[_wheel]} 正向起转占空比"
+    PARAM_NAMES[0x58 + _wheel] = f"{WHEEL_NAMES[_wheel]} 反向起转占空比"
+    PARAM_NAMES[0x5C + _wheel] = f"{WHEEL_NAMES[_wheel]} 轮方向"
+
+# 0xC9 REPORT_LOG / 0x0B LOG_EXPORT
+LOG_SOURCE_NAMES = {0: "运行日志", 1: "故障事件"}
+LOG_LEVEL_NAMES = {0: "DEBUG", 1: "INFO", 2: "WARN", 3: "ERROR"}
+
+# 0xC8 REPORT_STORAGE bits, in the order protocol.md lists them.
+STORAGE_FLAG_NAMES = (
+    "参数已落盘", "参数区有效", "标定区有效", "保存失败",
+    "镜像A有效", "镜像B有效", "有未读崩溃", "日志已回卷",
+)
 
 GRIPPER_ACTION_NAMES = {0: "张开", 1: "闭合"}
 GRIPPER_STATE_NAMES = {0: "张开", 1: "夹持", 2: "夹空"}
@@ -289,6 +327,32 @@ def clear_fault_payload(code: int = 0xFFFF) -> bytes:
     return struct.pack("<H", int(code) & 0xFFFF)
 
 
+def param_save_payload(scope: int = 0) -> bytes:
+    """scope: 0 = params, 1 = calibration, 2 = both."""
+    return struct.pack("<B", int(scope) & 0xFF)
+
+
+def param_reset_payload(scope: int = 0) -> bytes:
+    return struct.pack("<BB", int(scope) & 0xFF, 0xA5)
+
+
+def log_export_payload(source: int = 0, action: int = 1,
+                       from_seq: int = 0) -> bytes:
+    """action: 0 = stop, 1 = start. from_seq 0 means oldest available."""
+    return struct.pack("<BBI", int(source) & 0xFF, int(action) & 0xFF,
+                       max(0, min(0xFFFFFFFF, int(from_seq))))
+
+
+def crash_read_payload(slot: int = 0xFF, mark_read: bool = False) -> bytes:
+    """slot 0xFF = newest valid record."""
+    return struct.pack("<BB", int(slot) & 0xFF, 1 if mark_read else 0)
+
+
+def log_clear_payload(source: int = 0) -> bytes:
+    """source: 0 = run log, 1 = fault ring, 2 = crash, 3 = all."""
+    return struct.pack("<BB", int(source) & 0xFF, 0xA5)
+
+
 # ---------------------------------------------------------- payloads (up)
 
 def decode_odom(payload: bytes):
@@ -345,6 +409,64 @@ def decode_wheel_duty(payload: bytes):
             "rl_permille": rl, "rr_permille": rr}
 
 
+def decode_storage(payload: bytes):
+    """0xC8: flags + counters. See protocol.md 5.5.5 for the bit layout."""
+    if len(payload) != 24:
+        return None
+    (flags, log_level, param_seq, calib_seq, _reserved, boot_total,
+     log_used, log_erase, last_save_s) = struct.unpack("<BBHHHIIII", payload)
+    return {
+        "flags": flags,
+        "log_level": log_level,
+        "param_seq": param_seq,
+        "calib_seq": calib_seq,
+        "boot_total": boot_total,
+        "log_used_bytes": log_used,
+        "log_erase_count": log_erase,
+        "last_save_s": last_save_s,
+        "dirty": not (flags & 0x01),
+        "param_valid": bool(flags & 0x02),
+        "calib_valid": bool(flags & 0x04),
+        "save_failed": bool(flags & 0x08),
+        "image_a_valid": bool(flags & 0x10),
+        "image_b_valid": bool(flags & 0x20),
+        "crash_unread": bool(flags & 0x40),
+        "log_wrapped": bool(flags & 0x80),
+    }
+
+
+def decode_log(payload: bytes):
+    """0xC9: 15-byte header + up to 49 bytes of text."""
+    if len(payload) < 15:
+        return None
+    source, level, tag, flags, ts, seq, code, text_len = \
+        struct.unpack("<BBBBIIHB", payload[:15])
+    text = payload[15:15 + text_len]
+    if len(text) != text_len:
+        return None
+    return {
+        "source": source, "level": level, "tag": tag, "flags": flags,
+        "ts_s": ts, "seq": seq, "code": code,
+        "text": text.decode("utf-8", errors="replace"),
+        "more": bool(flags & 0x01), "end": bool(flags & 0x02),
+    }
+
+
+def decode_crash(payload: bytes):
+    """0xCA: 7-byte header + chunk data, reassemble by offset."""
+    if len(payload) < 7:
+        return None
+    slot, flags, offset, total_len, length = \
+        struct.unpack("<BBHHB", payload[:7])
+    data = payload[7:7 + length]
+    if len(data) != length:
+        return None
+    return {
+        "slot": slot, "more": bool(flags & 0x01), "offset": offset,
+        "total_len": total_len, "data": data,
+    }
+
+
 def describe(frame: Frame) -> str:
     """One-line human summary for the log pane."""
     if frame.is_ack:
@@ -399,6 +521,26 @@ def describe(frame: Frame) -> str:
         duty = decode_wheel_duty(frame.payload) or {}
         return (f"{name} A={duty.get('fl_permille')} B={duty.get('fr_permille')} "
                 f"C={duty.get('rl_permille')} D={duty.get('rr_permille')} ‰")
+    if frame.cmd == Report.STORAGE:
+        st = decode_storage(frame.payload) or {}
+        state = "已落盘" if not st.get("dirty", True) else "有未落盘参数"
+        return (f"{name} {state} param_seq={st.get('param_seq')} "
+                f"calib_seq={st.get('calib_seq')} "
+                f"log={st.get('log_used_bytes')}B "
+                f"擦除={st.get('log_erase_count')}次")
+    if frame.cmd == Report.LOG:
+        rec = decode_log(frame.payload) or {}
+        source = LOG_SOURCE_NAMES.get(rec.get("source"), "?")
+        level = LOG_LEVEL_NAMES.get(rec.get("level"), "?")
+        tail = " [结束]" if rec.get("end") else ""
+        return (f"{name} {source} {level} seq={rec.get('seq')} "
+                f"t={rec.get('ts_s')}s {rec.get('text', '')}{tail}")
+    if frame.cmd == Report.CRASH:
+        chunk = decode_crash(frame.payload) or {}
+        return (f"{name} slot={chunk.get('slot')} "
+                f"{chunk.get('offset')}/{chunk.get('total_len')} "
+                f"{len(chunk.get('data', b''))}B"
+                f"{' ...' if chunk.get('more') else ' 完'}")
 
     return f"{name} seq={frame.seq} len={len(frame.payload)}"
 
@@ -409,3 +551,6 @@ VECTOR_CRC = (b"123456789", 0x29B1)
 VECTOR_VELOCITY = bytes.fromhex("AA 55 06 01 01 2C 01 F4 01 72 3F")
 VECTOR_ENABLE = bytes.fromhex("AA 55 03 04 02 01 9F B5")
 VECTOR_ESTOP = bytes.fromhex("AA 55 02 06 03 39 38")
+VECTOR_PARAM_SAVE = bytes.fromhex("AA 55 03 08 04 00 79 7A")
+VECTOR_STORAGE_QUERY = bytes.fromhex("AA 55 02 0A 05 92 1D")
+VECTOR_LOG_EXPORT = bytes.fromhex("AA 55 08 0B 06 00 01 00 00 00 00 56 EC")

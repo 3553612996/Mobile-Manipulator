@@ -226,14 +226,14 @@ python tools/bench/wheel_tune.py --port COM7 step --speed 200 --kp 5.0 --ki 6.0 
 
 （`step` 会先下发增益再测量，等于一次"应用 + 复测"。）
 
-### 6.2 写外部 Flash（待实现）
+### 6.2 写外部 Flash（协议已定，驱动待实现）
 
-外部 Flash 参数存储完成后：
+存储分区、记录格式与保存命令见 [flash-layout.md](../architecture/flash-layout.md) 和 [protocol.md](../architecture/protocol.md) 5.5 节。固件实现后：
 
 1. `SET_PARAM` 写增益成功后在 RAM 生效，并置"参数脏"标志；
-2. 由控制任务（非通信任务）在总线空闲时写入参数区，避免两个任务同时擦写；
+2. 主机发 `PARAM_SAVE` 后由 `appStorage` 任务写入参数区（擦写只有一个写者，不占控制任务）；
 3. 上电时从 Flash 读参数，校验 CRC 失败或空白则退回 `app_robot_config.h` 的编译期值；
-4. 写成功后 `REPORT_STATUS` 增加一个"参数已固化"标志位，主机才知道可以断电。
+4. 写成功后 `REPORT_STORAGE`（`0xC8`）的 bit0"无脏数据"置位，主机才知道可以断电。
 
 固化时把 6.1 的四个值写进参数区，并把 `app_robot_config.h` 的编译期初值同步改成同一组数——编译期初值是 Flash 空白/损坏时的兜底，两者不一致会让"掉参数"故障表现得像正常工作。
 
