@@ -59,6 +59,12 @@ double steady_now_s()
     std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// robot_localization reads a zero covariance as "this value is exact". The 2D
+// firmware reports nothing for z / roll / pitch, and REPORT_ODOM carries no
+// lateral speed, so those entries must be marked unusable or the EKF will
+// prefer the wheel odometry's placeholder over a real IMU measurement.
+constexpr double kUnobservableCovariance = 1.0e6;
+
 }  // namespace
 
 class BaseBridge : public rclcpp::Node
@@ -333,12 +339,23 @@ private:
     message.twist.twist.linear.x = (vl + vr) / 2000.0;
     message.twist.twist.angular.z = (vr - vl) / 1000.0 / wheel_separation_m_;
 
+    // x and y are both measured: the firmware runs mecanum forward kinematics
+    // and integrates both axes, so the pose keeps its calibrated covariance.
     message.pose.covariance[0] = odom_pose_covariance_xy_;
     message.pose.covariance[7] = odom_pose_covariance_xy_;
     message.pose.covariance[35] = odom_pose_covariance_yaw_;
+
     message.twist.covariance[0] = odom_twist_covariance_xy_;
-    message.twist.covariance[7] = odom_twist_covariance_xy_;
     message.twist.covariance[35] = odom_twist_covariance_yaw_;
+
+    // Not observed by REPORT_ODOM (see kUnobservableCovariance).
+    message.pose.covariance[14] = kUnobservableCovariance;   // z
+    message.pose.covariance[21] = kUnobservableCovariance;   // roll
+    message.pose.covariance[28] = kUnobservableCovariance;   // pitch
+    message.twist.covariance[7] = kUnobservableCovariance;   // linear.y
+    message.twist.covariance[14] = kUnobservableCovariance;  // linear.z
+    message.twist.covariance[21] = kUnobservableCovariance;  // angular.x
+    message.twist.covariance[28] = kUnobservableCovariance;  // angular.y
 
     odom_pub_->publish(message);
 

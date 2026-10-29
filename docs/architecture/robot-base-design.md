@@ -200,6 +200,7 @@ angular.z = (vr - vl) / 1000.0 / wheel_separation_m   [rad/s]
 - v1 没有 `GET_PARAM`，固件里的标定值读不回来；改标定后必须人工同步 yaml，否则位姿（固件积分）与 twist（ROS 计算）会互相矛盾，EKF 缓慢漂移。
 - 台架上发 `w = +500 mrad/s`，yaw 应增大；本次实测符号正确。若反向，只在 ROS 侧取负，不改固件。
 - 协方差是占位值（`0.05 m² / 0.02 rad²` 等），定位/EKF 接入前按实测重标。
+- `REPORT_ODOM` 观测不到的自由度必须填 `1e6`（`kUnobservableCovariance`），不能留 0：`robot_localization` 把 0 读作"该量测完全准确"，会让轮式里程计的 z/roll/pitch 和 `linear.y` 盖过 IMU 的真实估计，且不报任何错。固件对 x、y、yaw 都有观测（麦轮正解积分两轴），所以这三个保持小幅值。
 
 ### 6.5 ACK、SEQ 与重发
 
