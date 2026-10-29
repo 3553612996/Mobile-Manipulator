@@ -1,6 +1,6 @@
-# ROS 2 工作空间
+# mobile_manipulator_ws
 
-RK3566 侧的 ROS 2 Humble 工作空间。M1 只建立**可编译的包骨架**：每个包都有 `package.xml`、`CMakeLists.txt`、源码占位目录和职责说明，节点与 launch 在后续里程碑逐个加入。
+RK3566 侧的 ROS 2 Humble 工作空间，对应本项目的移动抓取机器人。M1 只建立**可编译的包骨架**：每个包都有 `package.xml`、`CMakeLists.txt`、源码占位目录和职责说明，节点与 launch 在后续里程碑逐个加入。
 
 ## 环境
 
@@ -13,7 +13,7 @@ RK3566 侧的 ROS 2 Humble 工作空间。M1 只建立**可编译的包骨架**�
 ## 目录
 
 ```text
-ros2_ws/
+mobile_manipulator_ws/
 ├── README.md
 └── src/
     ├── robot_interfaces/   自定义 msg / srv / action
@@ -29,7 +29,7 @@ ros2_ws/
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd ros2_ws
+cd mobile_manipulator_ws
 colcon build --symlink-install
 source install/setup.bash
 ```

@@ -14,7 +14,7 @@ firmware/
 ├── app/          主固件
 └── shared/       两端共用：协议、CRC、故障码定义
 
-ros2_ws/src/
+mobile_manipulator_ws/src/
 ├── robot_interfaces/ 自定义 msg / srv / action
 ├── robot_bringup/   launch + 参数 + 地图 + URDF
 ├── robot_base/      串口桥接、里程计
