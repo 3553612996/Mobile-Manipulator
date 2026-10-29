@@ -55,6 +55,13 @@
 
 //******************************** Declaring ********************************//
 
+typedef enum
+{
+    SERVICE_CHASSIS_PID_KP = 0,
+    SERVICE_CHASSIS_PID_KI,
+    SERVICE_CHASSIS_PID_KD
+} service_chassis_pid_gain_t;
+
 typedef struct
 {
     /* Logical wheel -> physical motor. FL, FR, RL, RR. */
@@ -101,6 +108,21 @@ typedef struct
 } service_chassis_odometry_t;
 
 platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg);
+
+/*
+ * Change one wheel's gain at runtime. Only the control task (the owner of
+ * apply()) may call this: it re-initialises that wheel's PID and re-reads its
+ * encoder, so a gain change never inherits an integral from the old tuning.
+ * The value must be finite and in [0, SERVICE_CHASSIS_PID_GAIN_LIMIT].
+ */
+platform_err_t service_chassis_set_pid_gain(uint8_t wheel,
+                                            service_chassis_pid_gain_t gain,
+                                            float_t value);
+
+/* Read back one wheel's gain. Returns PLATFORM_ERR_PARAM when out of range. */
+platform_err_t service_chassis_get_pid_gain(uint8_t wheel,
+                                            service_chassis_pid_gain_t gain,
+                                            float_t *value);
 
 /* Enabling is refused while the emergency stop is latched. */
 platform_err_t service_chassis_enable(platform_bool_t enable, uint32_t now_ms);

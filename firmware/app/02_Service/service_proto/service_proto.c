@@ -411,6 +411,26 @@ platform_err_t service_proto_send_arm(
                                     PROTOCOL_LEN_REPORT_ARM);
 }
 
+platform_err_t service_proto_send_wheel_speed(
+                    const int16_t wheel_mm_s[PROTOCOL_WHEEL_COUNT])
+{
+    uint8_t payload[PROTOCOL_LEN_REPORT_WHEEL_SPEED];
+    uint8_t i;
+
+    if (wheel_mm_s == NULL)
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    for (i = 0u; i < PROTOCOL_WHEEL_COUNT; i++)
+    {
+        protocol_put_i16(&payload[(uint32_t)i * 2u], wheel_mm_s[i]);
+    }
+
+    return service_proto_send_frame(PROTOCOL_REPORT_WHEEL_SPEED, payload,
+                                    PROTOCOL_LEN_REPORT_WHEEL_SPEED);
+}
+
 platform_err_t service_proto_send_status(uint8_t state,
                                          uint16_t fault_code,
                                          uint16_t battery_mv,

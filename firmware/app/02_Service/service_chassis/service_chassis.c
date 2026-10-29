@@ -54,6 +54,12 @@
  */
 #define SERVICE_CHASSIS_ZERO_SPEED_EPS_MM_S ((float_t)5.0f)
 
+/*
+ * Sanity bound for a runtime gain. The application has a tighter policy limit
+ * (10.0 for Kp/Ki, 5.0 for Kd); this only keeps NaN/Inf out of the loop.
+ */
+#define SERVICE_CHASSIS_PID_GAIN_LIMIT ((float_t)1000.0f)
+
 //******************************** Variables ********************************//
 
 static struct
@@ -316,6 +322,112 @@ platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg)
     s_chassis.initialized = PLATFORM_TRUE;
 
     (void)platform_motor_stop_all();
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t service_chassis_set_pid_gain(uint8_t wheel,
+                                            service_chassis_pid_gain_t gain,
+                                            float_t value)
+{
+    platform_pid_cfg_t pid_cfg;
+
+    if (s_chassis.initialized == PLATFORM_FALSE)
+    {
+        return PLATFORM_ERR_NOT_INITIALIZED;
+    }
+
+    if (wheel >= SERVICE_CHASSIS_WHEEL_COUNT)
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    if ((gain != SERVICE_CHASSIS_PID_KP) &&
+        (gain != SERVICE_CHASSIS_PID_KI) &&
+        (gain != SERVICE_CHASSIS_PID_KD))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    /* The inverted comparison also rejects NaN. */
+    if ((!(value >= 0.0f)) || (value > SERVICE_CHASSIS_PID_GAIN_LIMIT))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    pid_cfg = s_chassis.pid[wheel].cfg;
+
+    if (gain == SERVICE_CHASSIS_PID_KP)
+    {
+        pid_cfg.kp = value;
+    }
+    else if (gain == SERVICE_CHASSIS_PID_KI)
+    {
+        pid_cfg.ki = value;
+    }
+    else
+    {
+        pid_cfg.kd = value;
+    }
+
+    if (platform_pid_init(&s_chassis.pid[wheel], &pid_cfg) != PLATFORM_ERR_OK)
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    /* Commit the config only after the PID accepted the new gains. */
+    if (gain == SERVICE_CHASSIS_PID_KP)
+    {
+        s_chassis.cfg.pid_kp[wheel] = value;
+    }
+    else if (gain == SERVICE_CHASSIS_PID_KI)
+    {
+        s_chassis.cfg.pid_ki[wheel] = value;
+    }
+    else
+    {
+        s_chassis.cfg.pid_kd[wheel] = value;
+    }
+
+    /*
+     * A new gain starts from a clean loop: discard the integral and use the
+     * current encoder count as the new baseline, exactly like a timeout
+     * recovery. Otherwise the first tick after tuning sees a huge step.
+     */
+    s_chassis.measured_wheel_mm_s[wheel] = 0;
+    s_chassis.pid_prev_counts[wheel] = 0;
+    (void)platform_motor_get_encoder(s_chassis.cfg.motor[wheel],
+                                     &s_chassis.pid_prev_counts[wheel]);
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t service_chassis_get_pid_gain(uint8_t wheel,
+                                            service_chassis_pid_gain_t gain,
+                                            float_t *value)
+{
+    if ((s_chassis.initialized == PLATFORM_FALSE) || (value == NULL) ||
+        (wheel >= SERVICE_CHASSIS_WHEEL_COUNT))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    if (gain == SERVICE_CHASSIS_PID_KP)
+    {
+        *value = s_chassis.pid[wheel].cfg.kp;
+    }
+    else if (gain == SERVICE_CHASSIS_PID_KI)
+    {
+        *value = s_chassis.pid[wheel].cfg.ki;
+    }
+    else if (gain == SERVICE_CHASSIS_PID_KD)
+    {
+        *value = s_chassis.pid[wheel].cfg.kd;
+    }
+    else
+    {
+        return PLATFORM_ERR_PARAM;
+    }
 
     return PLATFORM_ERR_OK;
 }

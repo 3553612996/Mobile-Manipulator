@@ -7,9 +7,9 @@
 | 服务 | 职责 | 关键接口 |
 | --- | --- | --- |
 | `service_key` | 按键去抖之上的短按/长按策略 | `service_key_init/update`，回调 `(id, event)` |
-| `service_chassis` | 麦轮逆运动学、四轮速度 PID、200 ms 指令超时、使能/急停、里程计 | `forward/backward/strafe/rotate/set_velocity/stop/emergency_stop` |
+| `service_chassis` | 麦轮逆运动学、四轮速度 PID、200 ms 指令超时、使能/急停、里程计 | `forward/backward/strafe/rotate/set_velocity/stop/emergency_stop`、`set_pid_gain/get_pid_gain`、`get_wheel_speeds` |
 | `service_arm` | 六轴限位校验、目标跟踪、移动到舵机总线 | `set_joints/get_targets/get_states` |
-| `service_proto` | 串口协议实现：取字节、解帧、分发、ACK、SEQ 去重、上报组帧 | `process/register/send_*` |
+| `service_proto` | 串口协议实现：取字节、解帧、分发、ACK、SEQ 去重、上报组帧 | `process/register/send_*`，含 `send_wheel_speed` |
 
 ## 为什么这些属于 service 而不是 app
 
@@ -54,8 +54,9 @@ service_key_update(elapsed_ms);
 ## 线程模型
 
 - 服务本身**不是线程安全的**，每个服务的状态归一个任务所有。
-- 当前分配：`service_chassis` 的 `apply/odometry` 与 `service_key` 在控制任务；`service_proto`、`service_arm` 和底盘目标设置（`set_velocity/enable/emergency_stop`）在通信任务。
+- 当前分配：`service_chassis` 的 `apply/odometry/set_pid_gain` 与 `service_key` 在控制任务；`service_proto`、`service_arm` 和底盘目标设置（`set_velocity/enable/emergency_stop`）在通信任务。
 - 跨任务共享的只有底盘的目标速度、使能位和急停位，都是单字读写，Cortex-M3 上原子。
+- PID 增益不属于共享变量：通信任务只把 `{wheel, gain, value}` 放进队列，由控制任务调用 `set_pid_gain()`，因此 PID 的浮点状态始终只有一个写者。
 - `service_proto` 的 TX 只有通信任务一个调用者，因此不需要发送互斥锁。
 
 ## 安全语义
@@ -83,12 +84,15 @@ service_key_update(elapsed_ms);
 PID 本体在 `03_Platform/platform_middleware/platform_pid`，服务只负责“目标从哪来、反馈从哪来、输出写到哪”。这样 PID 的数学可以在 PC 上单测，服务只做轮速编排。
 
 - 增益是**每轮独立**的，应用层当前按左/右两组初值填充；`APP_CHASSIS_LEFT/RIGHT_PID_*` 只是启动值，不是标定结果。
+- 运行期整定走 `service_chassis_set_pid_gain(wheel, gain, value)`：只改指定轮，先复制配置、调 `platform_pid_init()` 成功后才提交，失败时原增益保持不变。切换时会清实测速度并重新采样该轮编码器，避免把旧基线当成速度尖峰。`get_pid_gain()` 返回当前生效值。范围校验（0 ≤ 增益 ≤ 1000）在服务层做，APP 另有更严的协议上限。
 - 积分采用条件积分抗饱和：输出已顶到限幅且误差还在往同一方向推时，不再累加积分。
 - 微分作用在测量值上，设定值阶跃不会产生微分冲击；当前 `Kd=0`，等编码器速度加滤波后再开。
 - `counts_per_mm_x1000 = 0` 时无法得到速度反馈，服务退回原来的开环占空比映射，避免“有 PID 但反馈恒为 0”把输出顶到满量程。
 - 使能/急停切换由控制任务在 `apply()` 里检测并复位 PID；不在通信任务里直接改 PID 状态，避免多字节浮点被并发写坏。
 - 超时期间 PID 冻结在零输出，超时解除后重新采样编码器基线，避免把等待期间累计的计数当成速度尖峰。
 - 目标为 0 且实测速度已低于 5 mm/s 时清积分、输出 0。否则刹车过程中积累的负积分会在停车后继续给反向占空比，轮子出现低速蠕动；5 mm/s 低于 10 ms 内一个编码器计数对应的约 4 mm/s，不会误判正常运动。
+
+四轮实测速度由 `service_chassis_get_wheel_speeds()` 暴露（FL/FR/RL/RR，mm/s），APP 以 `REPORT_WHEEL_SPEED`（`0xC6`）20 ms 上报，供上位机调参页面显示闭环效果；开环回退时全为零。
 
 ## PC 单测
 

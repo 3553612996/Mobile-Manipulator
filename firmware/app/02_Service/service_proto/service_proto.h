@@ -108,6 +108,13 @@ platform_err_t service_proto_send_arm(
                             int16_t gripper_position,
                             uint8_t gripper_state);
 
+/*
+ * Measured wheel speeds in FL, FR, RL, RR order, mm/s. Sent at 50 Hz while
+ * the host is tuning so the effect of a gain change is visible.
+ */
+platform_err_t service_proto_send_wheel_speed(
+                    const int16_t wheel_mm_s[PROTOCOL_WHEEL_COUNT]);
+
 platform_err_t service_proto_send_status(uint8_t state,
                                          uint16_t fault_code,
                                          uint16_t battery_mv,

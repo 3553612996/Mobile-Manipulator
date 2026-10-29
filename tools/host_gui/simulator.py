@@ -23,12 +23,13 @@ import time
 
 from PySide6.QtCore import QObject, Signal
 
-from .protocol import (ACK_FLAG, Cmd, FrameParser, PARAM_NAMES, Report, Result,
-                       build_frame)
+from .protocol import (ACK_FLAG, PID_PARAM_IDS, Cmd, FrameParser, Report,
+                       Result, build_frame)
 
 TICK_S = 0.005
 VELOCITY_TIMEOUT_S = 0.200
 ODOM_PERIOD_S = 0.020
+WHEEL_SPEED_PERIOD_S = 0.020
 ARM_PERIOD_S = 0.050
 STATUS_PERIOD_S = 0.100
 HEARTBEAT_PERIOD_S = 0.100
@@ -101,6 +102,7 @@ class SimulatorLink(QObject):
         self._gripper = 0.0        # 0..1000
         self._gripper_target = 0.0
         self._gripper_state = 0
+        self._gains = [[1.0, 0.6, 0.0] for _ in range(4)]
         self._heartbeat = 0
         self._tx_seq = 0
         self._rng = random.Random(7)
@@ -112,7 +114,7 @@ class SimulatorLink(QObject):
 
     def _run(self) -> None:
         last = time.monotonic()
-        next_report = {"odom": 0.0, "arm": 0.0,
+        next_report = {"odom": 0.0, "wheel": 0.0, "arm": 0.0,
                        "status": 0.0, "beat": 0.0}
 
         while not self._stop.is_set():
@@ -132,6 +134,7 @@ class SimulatorLink(QObject):
 
             for key, period, builder in (
                     ("odom", ODOM_PERIOD_S, self._odom_payload),
+                    ("wheel", WHEEL_SPEED_PERIOD_S, self._wheel_speed_payload),
                     ("arm", ARM_PERIOD_S, self._arm_payload),
                     ("status", STATUS_PERIOD_S, self._status_payload),
                     ("beat", HEARTBEAT_PERIOD_S, self._heartbeat_payload)):
@@ -223,9 +226,19 @@ class SimulatorLink(QObject):
                 self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
                 return
             param_id = payload[0]
-            self._ack(cmd, frame.seq,
-                      Result.OK if param_id in PARAM_NAMES
-                      else Result.OUT_OF_RANGE)
+            value = struct.unpack("<i", payload[1:])[0]
+            target = self._param_target(param_id)
+            if target is None:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            gain, wheels = target
+            limit = 5000 if gain == 2 else 10000
+            if not 0 <= value <= limit:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            for wheel in wheels:
+                self._gains[wheel][gain] = value / 1000.0
+            self._ack(cmd, frame.seq, Result.OK)
             return
 
         if cmd == Cmd.ESTOP:
@@ -254,6 +267,18 @@ class SimulatorLink(QObject):
         if 0x01 <= cmd <= 0x3F:
             self._ack(cmd, frame.seq, Result.UNKNOWN_CMD)
 
+    @staticmethod
+    def _param_target(param_id: int):
+        """Return (gain_index, wheel_indices) or None for an unsupported id."""
+        for wheel, ids in enumerate(PID_PARAM_IDS):
+            if param_id in ids:
+                return ids.index(param_id), (wheel,)
+        if 0x03 <= param_id <= 0x05:
+            return param_id - 0x03, (0, 2)
+        if 0x06 <= param_id <= 0x08:
+            return param_id - 0x06, (1, 3)
+        return None
+
     def _ack(self, cmd: int, seq: int, result: Result) -> None:
         self._emit_frame(int(cmd) | ACK_FLAG,
                          bytes((seq & 0xFF, int(result) & 0xFF)))
@@ -276,6 +301,14 @@ class SimulatorLink(QObject):
                               int(round(self._y)), theta,
                               int(round(vl)), int(round(vr)))
         return Report.ODOM, payload
+
+    def _wheel_speed_payload(self) -> tuple[int, bytes]:
+        half = TRACK_WIDTH_MM / 2.0
+        left = self._v - self._w * half / 1000.0
+        right = self._v + self._w * half / 1000.0
+        payload = struct.pack("<4h", int(round(left)), int(round(right)),
+                              int(round(left)), int(round(right)))
+        return Report.WHEEL_SPEED, payload
 
     def _arm_payload(self) -> tuple[int, bytes]:
         payload = struct.pack("<6hhB",

@@ -34,6 +34,14 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 - 夹持力 0–100 + 张开 / 闭合按钮（`SET_GRIPPER`，带 ACK）
 - 「下发关节角度」一次性发送 `SET_ARM_JOINTS`
 
+**PID 调参**
+- 顶栏「PID 调参」进入独立页面，离开或急停时自动停车并返回主界面
+- A/B/C/D 四个轮可单选或多选（至少保留一个）；同一组滑条写所有选中轮
+- Kp / Ki 0–10.0，Kd 0–5.0，步进 0.001；滑条停止 250 ms 后按 `SET_PARAM 0x20~0x2B` 下发，逐帧等 ACK
+- 只选中一个轮时，滑条载入该轮当前增益；多选时滑条保持原值，写的值同时下发给所有选中轮
+- 页面实时显示四轮实测轮速（`REPORT_WHEEL_SPEED`），可勾选测试运动：使能开关 + ±150 mm/s 滑条，角速度为 0
+- 增益只写 MCU 的 RAM，掉电恢复固件初值；重新进入页面不会自动重发
+
 **遥测**
 - `REPORT_STATUS`：状态、故障码、电池电压、温度、心跳计数、调度抖动
 - `REPORT_ODOM`：X / Y / 航向 + 左右轮速曲线（最近 10 秒）
@@ -45,9 +53,9 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 
 | 方向 | 内容 |
 |------|------|
-| 下行 | `SET_VELOCITY` 50 Hz、`SET_ARM_JOINTS`、`SET_GRIPPER`（ACK）、`SET_ENABLE`（ACK）、`ESTOP`（ACK）、`CLEAR_FAULT`（ACK） |
-| 上行 | `REPORT_ODOM` 50 Hz、`REPORT_ARM` 20 Hz、`REPORT_STATUS` 10 Hz、`REPORT_EVENT`、`HEARTBEAT` 10 Hz、所有 ACK |
-| 未接入界面 | `SET_PARAM`（解码已实现，参数表未定稿，暂不暴露） |
+| 下行 | `SET_VELOCITY` 50 Hz、`SET_ARM_JOINTS`、`SET_GRIPPER`（ACK）、`SET_ENABLE`（ACK）、`SET_PARAM` PID 增益（ACK）、`ESTOP`（ACK）、`CLEAR_FAULT`（ACK） |
+| 上行 | `REPORT_ODOM` 50 Hz、`REPORT_WHEEL_SPEED` 50 Hz、`REPORT_ARM` 20 Hz、`REPORT_STATUS` 10 Hz、`REPORT_EVENT`、`HEARTBEAT` 10 Hz、所有 ACK |
+| 未接入界面 | `SET_PARAM` 的非 PID 参数（`0x01`/`0x02`/`0x10~0x12`），固件尚未实现 |
 
 时序：ACK 超时 200 ms、最多重试 3 次；解析器在 50 ms 无字节后复位（协议 §9）。
 `LEN` 下限取 2 而不是 3 —— ESTOP 就是 7 字节空负载帧。
@@ -68,12 +76,12 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 python tools/host_gui/test_protocol.py
 ```
 
-17 个用例，覆盖 CRC-16/CCITT-FALSE、协议 §10 的三条测试向量、CRC 错误后的重同步、
-非法 `LEN`（含 `0xAA` 字节引起的假帧头）、随机分片、半帧复位、ACK 字段与上报结构。
+20 个用例，覆盖 CRC-16/CCITT-FALSE、协议 §10 的三条测试向量、CRC 错误后的重同步、
+非法 `LEN`（含 `0xAA` 字节引起的假帧头）、随机分片、半帧复位、ACK 字段、上报结构、
+轮速上报与 PID 参数 ID 完整性。
 
 ## 已知缺口
 
-- `REPORT_STATUS` 的状态字节协议还没有定义枚举。界面暂按
-  `0 初始化 / 1 空闲 / 2 手动 / 3 自动 / 4 急停 / 5 故障` 显示，固件需要沿用或回写协议。
-- `SET_PARAM` 的参数 ID 表里左/右轮 PID 的划分待定（单轮还是共享），定稿后再做界面。
 - 模拟器对任何指令都应答，因此 ACK 超时 / 重试路径无法在 `--sim` 下复现，需要真实硬件或人为断链验证。
+- 模拟器的轮速是差速近似，不模拟编码器量化与 PID 动态；调参效果只能在真机上看。
+- 调参页面限速 150 mm/s、ω=0 是**界面约束**，固件不限制绕过页面的速度指令。

@@ -1059,9 +1059,44 @@
           <GroupName>App</GroupName>
           <Files>
             <File>
+              <FileName>app_battery.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_battery.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_fault.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_fault.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_handlers.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_handlers.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_report.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_report.c</FilePath>
+            </File>
+            <File>
               <FileName>app_robot.c</FileName>
               <FileType>1</FileType>
               <FilePath>../01_APP/app_robot/app_robot.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_state.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_state.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_tasks.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_tasks.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_user_init.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_user_init.c</FilePath>
             </File>
           </Files>
         </Group>
