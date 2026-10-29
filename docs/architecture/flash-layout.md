@@ -1,8 +1,8 @@
 # 外部 Flash 存储布局（W25Q64，8 MB）
 
-> **状态：布局与协议定义完成，未实现代码。** 本文只定"哪块区域放什么、记录长什么样、谁能写、掉电怎么办"，不含代码。第 11 节是已定的接口与遗留项，协议侧格式见 [protocol.md](protocol.md) 5.5 节。
+> **状态：布局与协议定义完成；驱动、服务层与磨损均衡已实现，应用层接入待做。** 本文只定"哪块区域放什么、记录长什么样、谁能写、掉电怎么办"，不含代码；实现方式和与本文的具体化差异见 [storage-design.md](storage-design.md)。第 11 节是已定的接口与遗留项，协议侧格式见 [protocol.md](protocol.md) 5.5 节。
 
-相关文档：[项目框架](overview.md) · [软件结构](software-design.md) · [串口协议](protocol.md) · [四轮整定记录](../bench/pid-tuning.md)
+相关文档：[项目框架](overview.md) · [软件结构](software-design.md) · [存储实现](storage-design.md) · [串口协议](protocol.md) · [四轮整定记录](../bench/pid-tuning.md)
 
 ---
 

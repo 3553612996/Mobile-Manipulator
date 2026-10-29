@@ -91,6 +91,11 @@ app_fault_scope_t app_fault_scope_get(uint16_t code)
         case PROTOCOL_FAULT_CRC_LIMIT:
         case PROTOCOL_FAULT_BATTERY_LOW:
         case PROTOCOL_FAULT_OVERTEMP:
+        /* Storage faults stop saving, not driving (protocol.md 8). */
+        case PROTOCOL_FAULT_PARAM_INVALID:
+        case PROTOCOL_FAULT_CALIB_INVALID:
+        case PROTOCOL_FAULT_STORAGE_WRITE:
+        case PROTOCOL_FAULT_PARTITION:
             return APP_FAULT_SCOPE_NONE;
 
         case PROTOCOL_FAULT_COMM_TIMEOUT:

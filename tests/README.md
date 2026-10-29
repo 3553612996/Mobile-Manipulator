@@ -10,6 +10,7 @@ tests/
     ├── protocol/            05_Middlewares/protocol
     ├── platform/            03_Platform/platform_middleware
     ├── service/             02_Service/service_*
+    ├── bsp/                 06_BSP 驱动
     └── app/                 01_APP/app_robot
 ```
 
@@ -22,6 +23,9 @@ tests/
 | [`unit/service/test_service_proto.c`](unit/service/test_service_proto.c) | L1 | `02_Service/service_proto` | M2 | UART 内存管道 |
 | [`unit/service/test_service_chassis.c`](unit/service/test_service_chassis.c) | L1 | `02_Service/service_chassis` | M2（M3 继续用） | 电机桩函数 |
 | [`unit/service/test_service_key.c`](unit/service/test_service_key.c) | L1 | `02_Service/service_key` | M2 | 按键状态脚本 |
+| [`unit/platform/test_platform_storage.c`](unit/platform/test_platform_storage.c) | L1 | `platform_wearlevel` / `platform_logstore` | 存储子系统 | RAM NOR 仿真（擦 0xFF、只清位、跨页拒绝） |
+| [`unit/service/test_service_storage.c`](unit/service/test_service_storage.c) | L1 | `02_Service/service_storage` | 存储子系统 | 8 MiB RAM NOR 仿真 |
+| [`unit/bsp/test_bsp_flash_w25q64.c`](unit/bsp/test_bsp_flash_w25q64.c) | L1 | `06_BSP/bsp_flash_w25q64` | 存储子系统 | 内存 W25Q64 模型（命令/CS/BUSY/WEL/JEDEC） |
 | [`unit/app/test_app_state.c`](unit/app/test_app_state.c) | L1 | `01_APP/app_robot/app_state` | M3 | 无 |
 | [`unit/app/test_app_fault.c`](unit/app/test_app_fault.c) | L1 | `01_APP/app_robot/app_fault` | M3 | 底盘/机械臂/协议服务桩 |
 
@@ -44,6 +48,9 @@ L3 台架测试不在 `tests/`：它需要在真机上跑，工具是 [`tools/be
 | `test_service_proto.c` | `build/test_service_proto` |
 | `test_service_chassis.c` | `build/test_service_chassis`（需要 `-lm`） |
 | `test_service_key.c` | `build/test_service_key` |
+| `test_platform_storage.c` | `build/test_platform_storage` |
+| `test_service_storage.c` | `build/test_service_storage` |
+| `test_bsp_flash_w25q64.c` | `build/test_bsp_flash_w25q64` |
 | `test_app_state.c` | `build/test_app_state` |
 | `test_app_fault.c` | `build/test_app_fault` |
 | `host_gui/test_protocol.py` | `python tools/host_gui/test_protocol.py` |
