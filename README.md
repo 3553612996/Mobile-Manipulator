@@ -36,6 +36,7 @@
 | [项目框架](docs/architecture/overview.md) | 双控分工、硬件拓扑、软件分层、数据流、部署 |
 | [软件结构](docs/architecture/software-design.md) | 包划分、接口、状态机、并发、错误处理 |
 | [串口协议](docs/architecture/protocol.md) | 帧格式、命令字、CRC、超时、故障码、测试向量 |
+| [Flash 布局](docs/architecture/flash-layout.md) | 外部 W25Q64 分区：参数、标定、镜像、故障环、日志环、崩溃现场 |
 | [提交规范](docs/conventions/commit-convention.md) | 提交信息、分支模型、版本与标签 |
 | [编码规范](docs/conventions/coding-style.md) | 命名、错误处理、ISR 约束 |
 | [自测规范](docs/conventions/testing.md) | 测试分层、故障注入、发版检查 |
