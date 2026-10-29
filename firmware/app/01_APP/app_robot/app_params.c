@@ -32,8 +32,6 @@
 #define APP_PARAMS_DIRTY_PARAM      ((uint8_t)0x01u)
 #define APP_PARAMS_DIRTY_CALIB      ((uint8_t)0x02u)
 
-#define APP_PARAMS_PI               (3.14159265358979323846f)
-
 /* ------------------------- version 2 parameter blob ---------------------- */
 #define APP_PARAMS_OFF_VERSION      (0u)
 #define APP_PARAMS_OFF_LENGTH       (2u)
@@ -183,13 +181,6 @@ static int32_t s_default_gain(uint8_t wheel, uint8_t gain)
 
     /* The compile-time constants are floats; the blob stores x1000 integers. */
     return (int32_t)((value * 1000.0f) + 0.5f);
-}
-
-/* counts_per_mm from the wheel diameter; see APP_CHASSIS_COUNTS_PER_REV. */
-static int32_t s_counts_for_diameter(int32_t diameter_mm)
-{
-    return (int32_t)(((float_t)APP_CHASSIS_COUNTS_PER_REV * 1000.0f) /
-                     (APP_PARAMS_PI * (float_t)diameter_mm) + 0.5f);
 }
 
 static void s_reset_param(void)
@@ -419,7 +410,12 @@ platform_err_t app_params_set_wheel_diameter_mm(int32_t value)
         return PLATFORM_ERR_PARAM;
     }
 
-    counts = s_counts_for_diameter(value);
+    /*
+     * Wheel geometry lives in the chassis service; APP_CHASSIS_COUNTS_PER_REV
+     * is the hardware constant it cannot know on its own.
+     */
+    counts = service_chassis_counts_per_mm_x1000(
+                 (int32_t)APP_CHASSIS_COUNTS_PER_REV, value);
 
     if ((counts < APP_PARAMS_COUNTS_MIN) || (counts > APP_PARAMS_COUNTS_MAX))
     {

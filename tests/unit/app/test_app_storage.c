@@ -225,7 +225,7 @@ platform_err_t service_storage_append(service_storage_ring_t ring,
 }
 
 platform_err_t service_storage_iter_begin(service_storage_ring_t ring,
-                                          platform_logstore_iter_t *iter,
+                                          service_storage_iter_t *iter,
                                           uint32_t from_seq)
 {
     (void)ring;
@@ -237,8 +237,8 @@ platform_err_t service_storage_iter_begin(service_storage_ring_t ring,
     return PLATFORM_ERR_OK;
 }
 
-platform_err_t platform_logstore_iter_next(platform_logstore_iter_t *iter,
-                                           platform_logstore_entry_t *entry)
+platform_err_t service_storage_iter_next(service_storage_iter_t *iter,
+                                         service_storage_entry_t *entry)
 {
     (void)iter;
 

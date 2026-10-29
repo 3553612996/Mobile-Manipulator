@@ -152,6 +152,17 @@ platform_err_t service_chassis_set_geometry(int16_t half_length_mm,
                                             int16_t half_width_mm);
 
 /*
+ * Encoder scale implied by a wheel diameter: counts_per_rev / (pi * d), x1000
+ * and rounded half away from zero. Wheel geometry is this service's business,
+ * so the application derives the scale from the calibrated diameter here
+ * instead of keeping a second copy of the formula. counts_per_rev is the
+ * hardware constant (quadrature counts per wheel revolution, gearbox
+ * included); a zero diameter returns 0 and stores nothing.
+ */
+int32_t service_chassis_counts_per_mm_x1000(int32_t counts_per_rev,
+                                            int32_t diameter_mm);
+
+/*
  * Per-wheel encoder scale and direction. counts_per_mm_x1000 is the x1000
  * integer the protocol uses; 0 restores the common cfg value. dir is +1 or
  * -1: a motor mounted mirrored gets -1, and every count delta is negated

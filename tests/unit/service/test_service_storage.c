@@ -252,8 +252,8 @@ static void test_blob_limits(void)
 
 static void test_ring_append_and_clear(void)
 {
-    platform_logstore_iter_t iter;
-    platform_logstore_entry_t entry;
+    service_storage_iter_t iter;
+    service_storage_entry_t entry;
     uint32_t seen;
     service_storage_status_t status;
 
@@ -270,7 +270,7 @@ static void test_ring_append_and_clear(void)
     seen = 0u;
     CHECK(service_storage_iter_begin(SERVICE_STORAGE_RING_LOG, &iter, 0u) ==
           PLATFORM_ERR_OK, "迭代器初始化应成功");
-    while (platform_logstore_iter_next(&iter, &entry) == PLATFORM_ERR_OK)
+    while (service_storage_iter_next(&iter, &entry) == PLATFORM_ERR_OK)
     {
         seen++;
         if (seen == 2u)
@@ -294,7 +294,7 @@ static void test_ring_append_and_clear(void)
     seen = 0u;
     CHECK(service_storage_iter_begin(SERVICE_STORAGE_RING_LOG, &iter, 0u) ==
           PLATFORM_ERR_OK, "清空后迭代器初始化应成功");
-    while (platform_logstore_iter_next(&iter, &entry) == PLATFORM_ERR_OK)
+    while (service_storage_iter_next(&iter, &entry) == PLATFORM_ERR_OK)
     {
         seen++;
     }

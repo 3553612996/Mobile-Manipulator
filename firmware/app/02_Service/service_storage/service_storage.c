@@ -1112,7 +1112,7 @@ platform_err_t service_storage_append(service_storage_ring_t ring,
 }
 
 platform_err_t service_storage_iter_begin(service_storage_ring_t ring,
-                                          platform_logstore_iter_t *iter,
+                                          service_storage_iter_t *iter,
                                           uint32_t from_seq)
 {
     if (ring >= SERVICE_STORAGE_RING_COUNT)
@@ -1125,6 +1125,13 @@ platform_err_t service_storage_iter_begin(service_storage_ring_t ring,
     }
 
     return platform_logstore_iter_begin(&s_rings[ring], iter, from_seq);
+}
+
+platform_err_t service_storage_iter_next(service_storage_iter_t *iter,
+                                         service_storage_entry_t *entry)
+{
+    /* The iterator already carries the ring it walks; nothing else to check. */
+    return platform_logstore_iter_next(iter, entry);
 }
 
 platform_err_t service_storage_ring_clear(service_storage_ring_t ring,

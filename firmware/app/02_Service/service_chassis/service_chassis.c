@@ -350,6 +350,18 @@ void service_chassis_inverse_kinematics(int16_t vx_mm_s,
         service_chassis_clamp_i16(vx - vy + turn);
 }
 
+int32_t service_chassis_counts_per_mm_x1000(int32_t counts_per_rev,
+                                            int32_t diameter_mm)
+{
+    if (diameter_mm == 0)
+    {
+        return 0;
+    }
+
+    return service_chassis_round(((float_t)counts_per_rev * 1000.0f) /
+                                 (SERVICE_CHASSIS_PI * (float_t)diameter_mm));
+}
+
 platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg)
 {
     platform_pid_cfg_t pid_cfg;
