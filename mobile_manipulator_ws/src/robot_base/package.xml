@@ -14,6 +14,11 @@
   <depend>nav_msgs</depend>
   <depend>std_srvs</depend>
   <depend>robot_interfaces</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>diagnostic_msgs</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

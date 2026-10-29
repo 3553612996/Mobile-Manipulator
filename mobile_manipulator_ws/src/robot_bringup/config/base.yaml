@@ -1,0 +1,40 @@
+base_bridge:
+  ros__parameters:
+    # 串口设备：/dev/robot_stm32 由 config/udev/ 的规则建立；未安装时为 /dev/ttyUSB0。
+    port: "/dev/robot_stm32"
+    baud: 115200
+
+    # 必须与固件 SET_PARAM 0x01（轮距，默认 240 mm）的标定值一致。
+    # v1 没有 GET_PARAM，固件里的值读不回来，改标定后要人工同步这里。
+    wheel_separation_m: 0.24
+
+    # SET_VELOCITY 固定 20 ms 一帧。即使 /cmd_vel 不变也要持续发：
+    # 固件 200 ms 收不到速度帧会主动停车并锁存 0x0202。
+    velocity_period_ms: 20
+
+    # ROS 侧自己的 cmd_vel 看门狗。超时后仍按 20 ms 发送零速帧，而不是停发，
+    # 这样恢复时不会触发固件的通信超时故障。
+    cmd_vel_timeout_s: 0.5
+
+    # 500 ms 内没有任何合法帧判定 MCU 失联：停止下发并发布诊断。
+    link_timeout_s: 0.5
+
+    # 需要 ACK 的命令（0x03 起）：200 ms 超时，最多重发 3 次（共 4 次尝试）。
+    ack_timeout_ms: 200
+    ack_retries: 3
+
+    # REPORT_ODOM 的 x/y/theta 直接作为 /odom 位姿（yaw 解卷绕后），并发布 TF。
+    publish_tf: true
+    odom_frame_id: "odom"
+    base_frame_id: "base_link"
+
+    # SET_VELOCITY 只有 v/w；linear.y、linear.z、angular.x/y 只能丢弃。
+    # 超过阈值时每 5 s 告警一次，参数可关闭。
+    warn_unsupported_cmd_vel: true
+    unsupported_cmd_vel_warn_period_s: 5.0
+
+    # 占位协方差，EKF/定位接入前按实测重标定。
+    odom_pose_covariance_xy: 0.05
+    odom_pose_covariance_yaw: 0.02
+    odom_twist_covariance_xy: 0.05
+    odom_twist_covariance_yaw: 0.05
