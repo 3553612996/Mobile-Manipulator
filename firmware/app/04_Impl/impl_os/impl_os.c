@@ -6,8 +6,9 @@
  * @par dependencies
  * - platform_os_task.h
  * - platform_os_time.h
+ * - platform_os_queue.h
  * - platform_os_critical.h
- * - FreeRTOS task API
+ * - FreeRTOS task / queue API
  *
  * @author wuying <3553612993@qq.com>
  *
@@ -17,6 +18,12 @@
  * forbids heap allocation after startup. The pool size is deliberately small
  * (4 tasks, 1.5 KB stack each). Adding a task means adding a pool slot or
  * raising IMPL_OS_TASK_STACK_WORDS, not calling pvPortMalloc.
+ *
+ * Queues follow the same rule: xQueueCreateStatic with 512 bytes of storage
+ * per slot, four slots. Item storage is a uint32_t array so the buffer is
+ * word-aligned, which covers every message type the firmware currently sends
+ * (largest is an 8-byte PID parameter). A queue larger than one slot is
+ * rejected at creation instead of silently truncated.
  *
  * The platform priority enum maps to the CMSIS-RTOS2 numeric values that the
  * CubeMX-generated tasks already use (NORMAL = 24), so new tasks and the
@@ -32,15 +39,21 @@
 
 #include "platform_os_task.h"
 #include "platform_os_time.h"
+#include "platform_os_queue.h"
 #include "platform_os_critical.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
 
 //******************************** Defines **********************************//
 
 #define IMPL_OS_MAX_TASKS           (4u)
 #define IMPL_OS_TASK_STACK_WORDS    (384u)  /* 1536 bytes per task. */
+
+#define IMPL_OS_MAX_QUEUES          (4u)
+#define IMPL_OS_QUEUE_STORAGE_BYTES (512u)  /* item_size * item_count cap. */
+#define IMPL_OS_QUEUE_STORAGE_WORDS (IMPL_OS_QUEUE_STORAGE_BYTES / 4u)
 
 /* CMSIS-RTOS2 priority values, matching the CubeMX task attributes. */
 #define IMPL_OS_PRIO_IDLE           (0u)
@@ -62,9 +75,18 @@ struct platform_os_task
     platform_bool_t             used;
 };
 
+struct platform_os_queue
+{
+    StaticQueue_t   control;
+    uint32_t        storage[IMPL_OS_QUEUE_STORAGE_WORDS];
+    QueueHandle_t   handle;
+    platform_bool_t used;
+};
+
 //******************************** Variables ********************************//
 
-static struct platform_os_task s_task_pool[IMPL_OS_MAX_TASKS];
+static struct platform_os_task  s_task_pool[IMPL_OS_MAX_TASKS];
+static struct platform_os_queue s_queue_pool[IMPL_OS_MAX_QUEUES];
 
 //******************************** Functions ********************************//
 
@@ -325,4 +347,294 @@ platform_os_critical_state_t platform_os_critical_enter(void)
 void platform_os_critical_exit(platform_os_critical_state_t state)
 {
     portCLEAR_INTERRUPT_MASK_FROM_ISR((UBaseType_t)state);
+}
+
+//****************************************************************************/
+//****************************** Message queue *******************************/
+//****************************************************************************/
+
+static TickType_t impl_os_queue_ticks(uint32_t timeout_ms)
+{
+    return (timeout_ms == PLATFORM_OS_WAIT_FOREVER) ? portMAX_DELAY
+                                                    : pdMS_TO_TICKS(timeout_ms);
+}
+
+static platform_err_t impl_os_queue_check(platform_os_queue_t queue)
+{
+    if ((queue == NULL) || (queue->used == PLATFORM_FALSE) ||
+        (queue->handle == NULL))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    return PLATFORM_ERR_OK;
+}
+
+/*
+ * Blocking calls are task-context only: calling them from an ISR would let the
+ * kernel suspend inside an interrupt. The *_from_isr variants are the only
+ * ones allowed there.
+ */
+static platform_err_t impl_os_queue_task_context(void)
+{
+    return (platform_os_is_in_isr() == PLATFORM_TRUE) ? PLATFORM_ERR_FAIL
+                                                      : PLATFORM_ERR_OK;
+}
+
+platform_err_t platform_os_queue_create(const char *name,
+                                        uint32_t item_size_bytes,
+                                        uint32_t item_count,
+                                        platform_os_queue_t *out_queue)
+{
+    struct platform_os_queue *slot = NULL;
+    uint32_t i;
+
+    /* FreeRTOS has no queue names outside the optional registry. */
+    (void)name;
+
+    if ((out_queue == NULL) || (item_size_bytes == 0u) || (item_count == 0u))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    *out_queue = NULL;
+
+    if ((item_size_bytes > IMPL_OS_QUEUE_STORAGE_BYTES) ||
+        (item_count > (IMPL_OS_QUEUE_STORAGE_BYTES / item_size_bytes)))
+    {
+        return PLATFORM_ERR_NO_MEMORY;
+    }
+
+    for (i = 0u; i < IMPL_OS_MAX_QUEUES; i++)
+    {
+        if (s_queue_pool[i].used == PLATFORM_FALSE)
+        {
+            slot = &s_queue_pool[i];
+            break;
+        }
+    }
+
+    if (slot == NULL)
+    {
+        return PLATFORM_ERR_NO_RESOURCE;
+    }
+
+    slot->handle = xQueueCreateStatic((UBaseType_t)item_count,
+                                      (UBaseType_t)item_size_bytes,
+                                      (uint8_t *)slot->storage,
+                                      &slot->control);
+    if (slot->handle == NULL)
+    {
+        return PLATFORM_ERR_NO_MEMORY;
+    }
+
+    slot->used = PLATFORM_TRUE;
+    *out_queue = slot;
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t platform_os_queue_send(platform_os_queue_t queue,
+                                      const void *item,
+                                      uint32_t timeout_ms)
+{
+    platform_err_t err;
+    BaseType_t     ok;
+
+    err = impl_os_queue_check(queue);
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    if (item == NULL)
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    err = impl_os_queue_task_context();
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    ok = xQueueSend(queue->handle, item, impl_os_queue_ticks(timeout_ms));
+
+    if (ok == pdPASS)
+    {
+        return PLATFORM_ERR_OK;
+    }
+
+    return (timeout_ms == PLATFORM_OS_NO_WAIT) ? PLATFORM_ERR_BUSY
+                                               : PLATFORM_ERR_TIMEOUT;
+}
+
+platform_err_t platform_os_queue_send_from_isr(platform_os_queue_t queue,
+                                               const void *item)
+{
+    platform_err_t err;
+    BaseType_t     woken = pdFALSE;
+    BaseType_t     ok;
+
+    err = impl_os_queue_check(queue);
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    if (item == NULL)
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    ok = xQueueSendFromISR(queue->handle, item, &woken);
+    portYIELD_FROM_ISR(woken);
+
+    return (ok == pdPASS) ? PLATFORM_ERR_OK : PLATFORM_ERR_BUSY;
+}
+
+platform_err_t platform_os_queue_receive(platform_os_queue_t queue,
+                                         void *item,
+                                         uint32_t timeout_ms)
+{
+    platform_err_t err;
+    BaseType_t     ok;
+
+    err = impl_os_queue_check(queue);
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    if (item == NULL)
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    err = impl_os_queue_task_context();
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    ok = xQueueReceive(queue->handle, item, impl_os_queue_ticks(timeout_ms));
+
+    if (ok == pdPASS)
+    {
+        return PLATFORM_ERR_OK;
+    }
+
+    return (timeout_ms == PLATFORM_OS_NO_WAIT) ? PLATFORM_ERR_BUSY
+                                               : PLATFORM_ERR_TIMEOUT;
+}
+
+platform_err_t platform_os_queue_receive_from_isr(platform_os_queue_t queue,
+                                                  void *item)
+{
+    platform_err_t err;
+    BaseType_t     woken = pdFALSE;
+    BaseType_t     ok;
+
+    err = impl_os_queue_check(queue);
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    if (item == NULL)
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    ok = xQueueReceiveFromISR(queue->handle, item, &woken);
+    portYIELD_FROM_ISR(woken);
+
+    return (ok == pdPASS) ? PLATFORM_ERR_OK : PLATFORM_ERR_BUSY;
+}
+
+platform_err_t platform_os_queue_peek(platform_os_queue_t queue,
+                                      void *item,
+                                      uint32_t timeout_ms)
+{
+    platform_err_t err;
+    BaseType_t     ok;
+
+    err = impl_os_queue_check(queue);
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    if (item == NULL)
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    err = impl_os_queue_task_context();
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    ok = xQueuePeek(queue->handle, item, impl_os_queue_ticks(timeout_ms));
+
+    if (ok == pdPASS)
+    {
+        return PLATFORM_ERR_OK;
+    }
+
+    return (timeout_ms == PLATFORM_OS_NO_WAIT) ? PLATFORM_ERR_BUSY
+                                               : PLATFORM_ERR_TIMEOUT;
+}
+
+uint32_t platform_os_queue_count(platform_os_queue_t queue)
+{
+    if (PLATFORM_IS_ERR(impl_os_queue_check(queue)))
+    {
+        return 0u;
+    }
+
+    return (uint32_t)uxQueueMessagesWaiting(queue->handle);
+}
+
+uint32_t platform_os_queue_free(platform_os_queue_t queue)
+{
+    if (PLATFORM_IS_ERR(impl_os_queue_check(queue)))
+    {
+        return 0u;
+    }
+
+    return (uint32_t)uxQueueSpacesAvailable(queue->handle);
+}
+
+platform_err_t platform_os_queue_reset(platform_os_queue_t queue)
+{
+    platform_err_t err;
+
+    err = impl_os_queue_check(queue);
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    (void)xQueueReset(queue->handle);
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t platform_os_queue_destroy(platform_os_queue_t queue)
+{
+    platform_err_t err;
+
+    err = impl_os_queue_check(queue);
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    vQueueDelete(queue->handle);
+    queue->handle = NULL;
+    queue->used = PLATFORM_FALSE;
+
+    return PLATFORM_ERR_OK;
 }
