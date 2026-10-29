@@ -312,7 +312,7 @@ FreeRTOS 上跑两个任务，定义在 `app_user_init.c` 的常量表里：
 | --- | --- | --- |
 | ROS 2 节点参数 | `robot_bringup/config/*.yaml` | 启动时加载，`ros2 param set` 可热改 |
 | 标定结果 | `config/calibration/*.yaml` | 启动加载，含设备序列号与日期 |
-| MCU 运行参数 | RAM（`SET_PARAM` 写入） | 立即生效，掉电恢复编译期初值（Flash 保留待标定完成后设计） |
+| MCU 运行参数 | RAM（`SET_PARAM` 写入）；固化后写外部 Flash 参数区，布局见 [flash-layout.md](flash-layout.md) | 立即生效；掉电恢复 Flash 中的值，Flash 无效时退回编译期初值 |
 | 编译期常量 | `shared/config.h` | 重新编译 |
 
 **规则**：任何会影响行为的数字都不许硬编码在业务代码里。标定文件必须写明设备序列号和标定日期——换了相机还用旧标定，是视觉抓取项目里最隐蔽的错误来源。
