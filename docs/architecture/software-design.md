@@ -18,6 +18,7 @@ mobile_manipulator_ws/src/
 ├── robot_interfaces/ 自定义 msg / srv / action
 ├── robot_bringup/   launch + 参数 + 地图 + URDF
 ├── robot_base/      串口桥接、里程计
+├── robot_lidar/     X2 雷达驱动、/scan、点云
 ├── robot_arm/       关节控制、逆解、轨迹
 ├── robot_vision/    YOLO/RKNN 推理、目标定位
 ├── robot_speech/    Vosk 识别、意图解析
@@ -37,12 +38,15 @@ mobile_manipulator_ws/src/
 | `robot_interfaces` | 自定义消息、服务、动作 | 仅 rosidl |
 | `robot_bringup` | 启动编排、参数、地图 | 全部 |
 | `robot_base` | `/cmd_vel` ↔ 串口；串口 → `/odom` | rclcpp、geometry_msgs、nav_msgs、std_srvs、robot_interfaces |
+| `robot_lidar` | X2 雷达串口驱动；`/scan` 与点云 | rclcpp、sensor_msgs |
 | `robot_arm` | 关节目标下发、逆解、抓取序列 | rclcpp、rclcpp_action、geometry_msgs、sensor_msgs、trajectory_msgs、robot_interfaces；KDL / TRAC-IK（M8） |
 | `robot_vision` | 图像 → 检测框 → 3D 坐标 | rclcpp、sensor_msgs、geometry_msgs、vision_msgs、cv_bridge、image_transport、tf2_ros、robot_interfaces；OpenCV / RKNN（M7） |
 | `robot_speech` | 音频 → 文本 → 意图 | rclcpp、std_msgs、robot_interfaces；Vosk（M9） |
 | `robot_task` | 任务编排、状态机 | rclcpp、rclcpp_action、geometry_msgs、nav2_msgs、std_srvs、robot_interfaces |
 
 **依赖方向必须是单向的**：`robot_task` 依赖其他包的接口，其他包不依赖 `robot_task`。否则会形成环，编译顺序和测试都会出问题。
+
+`robot_base` 的实现细节——帧编解码分层、20 ms 速度流、航向解卷绕、ACK 重发、断链重连与实测数据——见 [底盘串口桥接设计](robot-base-design.md)。
 
 ---
 
@@ -54,7 +58,8 @@ mobile_manipulator_ws/src/
 | --- | --- | --- | --- |
 | `/cmd_vel` | `geometry_msgs/Twist` | 50 Hz | RELIABLE |
 | `/odom` | `nav_msgs/Odometry` | 50 Hz | RELIABLE |
-| `/scan` | `sensor_msgs/LaserScan` | 10 Hz | BEST_EFFORT |
+| `/scan` | `sensor_msgs/LaserScan` | 约 6 Hz（X2；设计值 10 Hz） | BEST_EFFORT |
+| `/lidar/points` | `sensor_msgs/PointCloud2` | 随雷达（X2 约 6 Hz） | BEST_EFFORT |
 | `/camera/color/image_raw` | `sensor_msgs/Image` | 30 Hz | BEST_EFFORT |
 | `/joint_states` | `sensor_msgs/JointState` | 20 Hz | RELIABLE |
 | `/detections` | `vision_msgs/Detection2DArray` | 10 Hz | BEST_EFFORT |

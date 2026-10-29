@@ -14,6 +14,7 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>robot_interfaces</exec_depend>
   <exec_depend>robot_base</exec_depend>
+  <exec_depend>robot_lidar</exec_depend>
   <exec_depend>robot_arm</exec_depend>
   <exec_depend>robot_vision</exec_depend>
   <exec_depend>robot_speech</exec_depend>

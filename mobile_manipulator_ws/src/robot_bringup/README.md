@@ -19,6 +19,7 @@ robot_bringup/
 | 文件 | 内容 | 加入节点 |
 | --- | --- | --- |
 | `launch/base.launch.py` | 底盘桥接 + 串口参数 | M3 |
+| `launch/lidar.launch.py` | X2 雷达驱动（`/scan`、`/lidar/points`） | M4 |
 | `launch/slam.launch.py` | 激光建图与定位 | M4 |
 | `launch/nav2.launch.py` | Nav2 导航 | M5 |
 | `launch/vision.launch.py` | 相机与视觉推理 | M7 |
