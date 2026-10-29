@@ -36,11 +36,11 @@ ros2_ws/src/
 | --- | --- | --- |
 | `robot_interfaces` | 自定义消息、服务、动作 | 仅 rosidl |
 | `robot_bringup` | 启动编排、参数、地图 | 全部 |
-| `robot_base` | `/cmd_vel` ↔ 串口；串口 → `/odom` | 无（只依赖 rclcpp + serial） |
-| `robot_arm` | 关节目标下发、逆解、抓取序列 | KDL / TRAC-IK |
-| `robot_vision` | 图像 → 检测框 → 3D 坐标 | OpenCV、RKNN runtime |
-| `robot_speech` | 音频 → 文本 → 意图 | Vosk |
-| `robot_task` | 任务编排、状态机 | 仅接口，不依赖实现 |
+| `robot_base` | `/cmd_vel` ↔ 串口；串口 → `/odom` | rclcpp、geometry_msgs、nav_msgs、std_srvs、robot_interfaces |
+| `robot_arm` | 关节目标下发、逆解、抓取序列 | rclcpp、rclcpp_action、geometry_msgs、sensor_msgs、trajectory_msgs、robot_interfaces；KDL / TRAC-IK（M8） |
+| `robot_vision` | 图像 → 检测框 → 3D 坐标 | rclcpp、sensor_msgs、geometry_msgs、vision_msgs、cv_bridge、image_transport、tf2_ros、robot_interfaces；OpenCV / RKNN（M7） |
+| `robot_speech` | 音频 → 文本 → 意图 | rclcpp、std_msgs、robot_interfaces；Vosk（M9） |
+| `robot_task` | 任务编排、状态机 | rclcpp、rclcpp_action、geometry_msgs、nav2_msgs、std_srvs、robot_interfaces |
 
 **依赖方向必须是单向的**：`robot_task` 依赖其他包的接口，其他包不依赖 `robot_task`。否则会形成环，编译顺序和测试都会出问题。
 
