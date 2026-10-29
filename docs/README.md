@@ -16,6 +16,7 @@ docs/
 | [architecture/overview.md](architecture/overview.md) | 项目框架：双控分工、硬件拓扑、软件分层、数据流、部署 |
 | [architecture/software-design.md](architecture/software-design.md) | 软件结构：包划分、接口、状态机、并发、错误处理、参数管理 |
 | [architecture/protocol.md](architecture/protocol.md) | 串口协议 v1：帧格式、命令字、CRC、超时、故障码、测试向量 |
+| [architecture/robot-base-design.md](architecture/robot-base-design.md) | 底盘串口桥接：分层、线程与时序、接口、设计决策、实测记录 |
 | [architecture/flash-layout.md](architecture/flash-layout.md) | 外部 Flash 布局：参数/标定/镜像/故障/日志区域、记录格式、掉电安全、寿命预算 |
 
 ## 工程规范
