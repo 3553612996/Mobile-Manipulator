@@ -58,7 +58,16 @@
 
 ## 构建与运行
 
-待补。参考 `scripts/` 下的脚本。
+ROS 2 工作空间（RK3566 / Ubuntu + ROS 2 Humble）：
+
+```bash
+source /opt/ros/humble/setup.bash
+cd ros2_ws
+colcon build --symlink-install
+source install/setup.bash
+```
+
+当前 M1 只有包骨架，节点与 launch 在 M3～M9 补充，详见 [ROS 2 工作空间](ros2_ws/README.md)。固件构建见 `firmware/` 与 `scripts/`。
 
 ## 说明
 
