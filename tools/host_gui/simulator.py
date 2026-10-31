@@ -23,21 +23,32 @@ import time
 
 from PySide6.QtCore import QObject, Signal
 
-from .protocol import (ACK_FLAG, COUNTS_PER_MM_IDS, CRASH_SLOT_COUNT,
-                       CRASH_SLOT_LATEST, DIRECTION_IDS, DUTY_FWD_IDS,
-                       DUTY_REV_IDS, PID_PARAM_IDS, Cmd, FrameParser, Report,
-                       Result, build_frame)
+from .protocol import (ACK_FLAG, ARM_PARAM_IDS, COUNTS_PER_MM_IDS,
+                       CRASH_SLOT_COUNT, CRASH_SLOT_LATEST, DIRECTION_IDS,
+                       DUTY_FWD_IDS, DUTY_REV_IDS, PARAM_CHUNK_RECORD_MAX,
+                       PARAM_INFO_STALL_MARGIN_MS, PARAM_INFO_WHEELBASE_MM,
+                       PARAM_KIND_CALIB, PARAM_KIND_INFO, PARAM_KIND_PARAM,
+                       PARAM_KIND_SERVO_ID, PARAM_KIND_SERVO_OFFSET,
+                       PID_PARAM_IDS, SERVO_OP_CALIBRATE,
+                       SERVO_OP_CLEAR_CALIB, SERVO_OP_SET_BIAS,
+                       SERVO_OP_SET_ID, SERVO_OP_TORQUE, Cmd, FrameParser,
+                       Report, Result, build_frame)
 
 TICK_S = 0.005
 VELOCITY_TIMEOUT_S = 0.200
 ODOM_PERIOD_S = 0.020
 WHEEL_SPEED_PERIOD_S = 0.020
 ARM_PERIOD_S = 0.050
+ARM_STATUS_PERIOD_S = 0.500    # protocol.md 5.6.2: 0xCB at 2 Hz
 STATUS_PERIOD_S = 0.100
 HEARTBEAT_PERIOD_S = 0.100
 TRACK_WIDTH_MM = 200.0
+# Read-only in the firmware (2 * APP_CHASSIS_HALF_LENGTH_MM = 300 mm); the
+# calibration page can only change the track width (0x01).
+SIM_WHEELBASE_MM = 300
 JOINT_RATE = 6000.0        # centi-degrees per second
 GRIPPER_RATE = 500.0       # position units per second
+PARAM_TX_PERIOD_S = 0.010  # one REPORT_PARAM chunk per comm tick
 
 # Storage side (protocol.md 5.5). The virtual device starts with values that
 # match the calibration page's defaults, so a write followed by a read-back
@@ -45,6 +56,19 @@ GRIPPER_RATE = 500.0       # position units per second
 LOG_EXPORT_PERIOD_S = 0.050        # the firmware's 20 Hz ceiling
 CRASH_CHUNK_BYTES = 32
 DEFAULT_LIMITS = {"timeout_ms": 200, "max_linear": 500, "max_angular": 1500}
+# protocol.md 5.4 "机械臂保护阈值 0x60~0x64".
+DEFAULT_ARM_PROTECTION = {"overtemp_c": 65, "undervolt_mv": 5500,
+                          "overvolt_mv": 8400, "stall_error_cdeg": 300,
+                          "stall_time_ms": 600}
+ARM_PARAM_RANGES = {
+    "overtemp_c": (-40, 150),
+    "undervolt_mv": (4000, 8999),
+    "overvolt_mv": (4001, 9000),
+    "stall_error_cdeg": (1, 4500),
+    "stall_time_ms": (100, 5000),
+}
+ARM_PARAM_FIELDS = {param_id: name
+                    for name, param_id in ARM_PARAM_IDS.items()}
 DEFAULT_CALIB = {
     "wheel_base": 240,
     "wheel_diameter": 60,
@@ -140,6 +164,10 @@ class SimulatorLink(QObject):
         self._theta = 0.0          # rad
         self._joints = [0.0] * 6   # centi-degrees
         self._joint_targets = [0.0] * 6
+        self._servo_ids = list(range(1, 7))
+        self._servo_bias = [0] * 6
+        self._servo_zero = [0] * 6     # calibrated zero, 0.01 degree
+        self._servo_torque = [True] * 6
         self._gripper = 0.0        # 0..1000
         self._gripper_target = 0.0
         self._gripper_state = 0
@@ -166,6 +194,7 @@ class SimulatorLink(QObject):
         self._crash_unread = True
         self._log_wrapped = False
         self._limits = dict(DEFAULT_LIMITS)
+        self._arm_protection = dict(DEFAULT_ARM_PROTECTION)
         self._calib = {key: (list(value) if isinstance(value, list) else value)
                        for key, value in DEFAULT_CALIB.items()}
         self._logs = self._seed_logs()
@@ -173,13 +202,14 @@ class SimulatorLink(QObject):
         self._export: dict | None = None
         self._crash_records = [self._make_crash()]
         self._crash_tx: dict | None = None
+        self._param_tx: dict | None = None
 
     # -- worker ------------------------------------------------------------
 
     def _run(self) -> None:
         last = time.monotonic()
         next_report = {"odom": 0.0, "wheel": 0.0, "arm": 0.0,
-                       "status": 0.0, "beat": 0.0}
+                       "arm_status": 0.0, "status": 0.0, "beat": 0.0}
 
         while not self._stop.is_set():
             now = time.monotonic()
@@ -197,11 +227,14 @@ class SimulatorLink(QObject):
             self._step(dt, now)
             self._step_export(now)
             self._step_crash()
+            self._step_param(now)
 
             for key, period, builder in (
                     ("odom", ODOM_PERIOD_S, self._odom_payload),
                     ("wheel", WHEEL_SPEED_PERIOD_S, self._wheel_speed_payload),
                     ("arm", ARM_PERIOD_S, self._arm_payload),
+                    ("arm_status", ARM_STATUS_PERIOD_S,
+                     self._arm_status_payload),
                     ("status", STATUS_PERIOD_S, self._status_payload),
                     ("beat", HEARTBEAT_PERIOD_S, self._heartbeat_payload)):
                 if now >= next_report[key]:
@@ -287,6 +320,10 @@ class SimulatorLink(QObject):
                 self._ack(cmd, frame.seq, Result.OK)
             return
 
+        if cmd == Cmd.SERVO_CONFIG:
+            self._handle_servo_config(frame)
+            return
+
         if cmd == Cmd.SET_PARAM:
             if len(payload) != 5:
                 self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
@@ -307,6 +344,15 @@ class SimulatorLink(QObject):
         if cmd == Cmd.STORAGE_QUERY:
             self._ack(cmd, frame.seq, Result.OK)
             self._emit(self._storage_payload())
+            return
+
+        if cmd == Cmd.GET_PARAM:
+            if len(payload) != 0:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            # A second request restarts at chunk 0, as in the firmware.
+            self._param_tx = {"index": 0, "next_at": now}
+            self._ack(cmd, frame.seq, Result.OK)
             return
 
         if cmd == Cmd.LOG_EXPORT:
@@ -346,6 +392,50 @@ class SimulatorLink(QObject):
 
         if 0x01 <= cmd <= 0x3F:
             self._ack(cmd, frame.seq, Result.UNKNOWN_CMD)
+
+    # -- servo configuration ----------------------------------------------
+
+    def _handle_servo_config(self, frame) -> None:
+        """0x0E: the firmware executes synchronously and answers 0x05 if the
+        arm is enabled (protocol.md 5.6.1)."""
+        cmd = int(Cmd.SERVO_CONFIG)
+        if len(frame.payload) != 6:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+        joint, op, value = struct.unpack("<BBi", frame.payload)
+        if joint >= 6 or not 1 <= op <= 5:
+            self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+            return
+        if self._enabled:
+            self._ack(cmd, frame.seq, Result.BUSY)
+            return
+
+        if op == SERVO_OP_SET_ID:
+            others = [self._servo_ids[index] for index in range(6)
+                      if index != joint]
+            if not 0 <= value <= 254 or value in others:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            self._servo_ids[joint] = value
+        elif op == SERVO_OP_SET_BIAS:
+            if not -100 <= value <= 100:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            self._servo_bias[joint] = value
+        elif op == SERVO_OP_CALIBRATE:
+            # The raw angle that becomes the new zero is what the board keeps
+            # in the calibration blob; afterwards the joint reads 0.00.
+            self._servo_zero[joint] = int(round(self._joints[joint]))
+            self._joints[joint] = 0.0
+            self._joint_targets[joint] = 0.0
+        elif op == SERVO_OP_CLEAR_CALIB:
+            self._servo_zero[joint] = 0
+        else:                                      # TORQUE
+            if value not in (0, 1):
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            self._servo_torque[joint] = bool(value)
+        self._ack(cmd, frame.seq, Result.OK)
 
     # -- parameters and calibration ---------------------------------------
 
@@ -392,6 +482,27 @@ class SimulatorLink(QObject):
                 self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
                 return
             self._limits[LIMIT_PARAM_IDS[param_id]] = value
+            self._dirty_param = True
+            self._ack(cmd, frame.seq, Result.OK)
+            return
+
+        if param_id in ARM_PARAM_FIELDS:
+            field = ARM_PARAM_FIELDS[param_id]
+            low, high = ARM_PARAM_RANGES[field]
+            if not low <= value <= high:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            # 0x61 must stay below 0x62; the firmware rejects the request
+            # instead of writing half of a nonsensical window.
+            if field == "undervolt_mv" and \
+                    value >= self._arm_protection["overvolt_mv"]:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            if field == "overvolt_mv" and \
+                    value <= self._arm_protection["undervolt_mv"]:
+                self._ack(cmd, frame.seq, Result.OUT_OF_RANGE)
+                return
+            self._arm_protection[field] = value
             self._dirty_param = True
             self._ack(cmd, frame.seq, Result.OK)
             return
@@ -444,12 +555,16 @@ class SimulatorLink(QObject):
         if scope in (0, 2):
             self._gains = [[5.0, 6.0, 0.0] for _ in range(4)]
             self._limits = dict(DEFAULT_LIMITS)
+            self._arm_protection = dict(DEFAULT_ARM_PROTECTION)
             self._log_level = 1
             self._dirty_param = True
         if scope in (1, 2):
             self._calib = {
                 key: (list(value) if isinstance(value, list) else value)
                 for key, value in DEFAULT_CALIB.items()}
+            # Factory arm map: joint n on servo n+1, mechanical zero cleared.
+            self._servo_ids = list(range(1, 7))
+            self._servo_zero = [0] * 6
             self._dirty_calib = True
         self._ack(cmd, frame.seq, Result.OK)
 
@@ -530,6 +645,70 @@ class SimulatorLink(QObject):
         self._ack(cmd, frame.seq, Result.OK)
         self._emit(self._storage_payload())
 
+    # -- parameter dump (GET_PARAM) ---------------------------------------
+
+    def _param_records(self) -> list[tuple[int, int, int]]:
+        """Same order and units as app_report.c: kind, id, value."""
+        records: list[tuple[int, int, int]] = [
+            (PARAM_KIND_PARAM, 0x10, self._limits["timeout_ms"]),
+            (PARAM_KIND_PARAM, 0x11, self._limits["max_linear"]),
+            (PARAM_KIND_PARAM, 0x12, self._limits["max_angular"]),
+        ]
+        for wheel, ids in enumerate(PID_PARAM_IDS):
+            for gain, param_id in enumerate(ids):
+                records.append(
+                    (PARAM_KIND_PARAM, param_id,
+                     int(round(self._gains[wheel][gain] * 1000))))
+        records.append((PARAM_KIND_PARAM, 0x40, self._log_level))
+
+        records.append((PARAM_KIND_CALIB, 0x01, self._calib["wheel_base"]))
+        records.append((PARAM_KIND_CALIB, 0x02,
+                        self._calib["wheel_diameter"]))
+        for wheel, param_id in enumerate(COUNTS_PER_MM_IDS):
+            records.append((PARAM_KIND_CALIB, param_id,
+                            self._calib["counts"][wheel]))
+        for wheel, param_id in enumerate(DUTY_FWD_IDS):
+            records.append((PARAM_KIND_CALIB, param_id,
+                            self._calib["duty_fwd"][wheel]))
+        for wheel, param_id in enumerate(DUTY_REV_IDS):
+            records.append((PARAM_KIND_CALIB, param_id,
+                            self._calib["duty_rev"][wheel]))
+        for wheel, param_id in enumerate(DIRECTION_IDS):
+            records.append((PARAM_KIND_CALIB, param_id,
+                            self._calib["direction"][wheel]))
+
+        for joint in range(6):
+            records.append((PARAM_KIND_SERVO_ID, joint,
+                            self._servo_ids[joint]))
+        for joint in range(6):
+            records.append((PARAM_KIND_SERVO_OFFSET, joint,
+                            self._servo_zero[joint]))
+
+        records.append((PARAM_KIND_INFO, PARAM_INFO_WHEELBASE_MM,
+                        SIM_WHEELBASE_MM))
+        records.append((PARAM_KIND_INFO, PARAM_INFO_STALL_MARGIN_MS, 1000))
+        return records
+
+    def _step_param(self, now: float) -> None:
+        if self._param_tx is None or now < self._param_tx["next_at"]:
+            return
+
+        records = self._param_records()
+        index = self._param_tx["index"]
+        start = index * PARAM_CHUNK_RECORD_MAX
+        chunk = records[start:start + PARAM_CHUNK_RECORD_MAX]
+        last = start + len(chunk) >= len(records)
+
+        payload = struct.pack("<BBB", index, 1 if last else 0, len(chunk))
+        for kind, param_id, value in chunk:
+            payload += struct.pack("<BBi", kind, param_id, value)
+        self._emit((Report.PARAM, payload))
+
+        self._param_tx["index"] = index + 1
+        self._param_tx["next_at"] = now + PARAM_TX_PERIOD_S
+        if last:
+            self._param_tx = None
+
     @staticmethod
     def _param_target(param_id: int):
         """Return (gain_index, wheel_indices) or None for an unsupported id."""
@@ -579,6 +758,23 @@ class SimulatorLink(QObject):
                              int(round(self._gripper)),
                              self._gripper_state)
         return Report.ARM, payload
+
+    def _arm_status_payload(self) -> tuple[int, bytes]:
+        flags = 0
+        if self._enabled:
+            flags |= 0x01
+        if self._fault:
+            flags |= 0x02
+        rail_mv = 7400 + self._rng.randint(-30, 30)
+        joints = b""
+        for index in range(6):
+            temp = 31 + index + self._rng.choice((0, 0, 1))
+            faults = 0
+            if temp >= self._arm_protection["overtemp_c"]:
+                faults |= 0x02
+            joints += struct.pack("<hbB", int(round(self._joints[index])),
+                                  temp, faults)
+        return Report.ARM_STATUS, struct.pack("<BH", flags, rail_mv) + joints
 
     def _status_payload(self) -> tuple[int, bytes]:
         elapsed = time.monotonic() - self._started_at

@@ -32,7 +32,20 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 **机械臂**
 - 6 个关节滑杆（±90°，单位 centi-degree），旁边显示 MCU 回报的实际角度
 - 夹持力 0–100 + 张开 / 闭合按钮（`SET_GRIPPER`，带 ACK）
-- 「下发关节角度」一次性发送 `SET_ARM_JOINTS`
+- 「实时跟随」（默认开）：拖动任一关节滑杆时按 100 ms 节拍持续下发六轴目标（总线帧间隔下限），松手即停；滑杆不动不发帧
+- 「下发关节角度」一次性发送 `SET_ARM_JOINTS`，用于关掉跟随后确认姿态
+- 使能成功时滑杆自动对齐 `REPORT_ARM` 的实际角度。`SET_ARM_JOINTS` 一次下发全部六轴，若滑杆还停在 0° 就开始跟随，第一次拖动会把其它关节拽回零位；1 s 内没有关节上报时保留原值并自动关闭跟随，确认姿态后可手动再勾选
+- 行程时间由固件决定：单次下发 800 ms；检测到连续拖动（400 ms 内又来一帧）改用 200 ms。总线每 100 ms 才有一个槽且两次运动之间必须夹一次查询，所以运动帧实际 5 Hz，拖动时实际角滞后约 0.2–0.4 s（排队 0–200 ms + 一段 200 ms 插值）。时间不在协议里，上位机无法直接设置
+
+**机械臂舵机**
+- 顶栏「机械臂」进入独立页面，数据来自 `REPORT_ARM_STATUS 0xCB`（2 Hz）
+- 关节表显示每轴的**实际角、温度、故障位**（离线 / 过温 / 欠压 / 过压 / 堵转 / 回包错）和舵机电源电压；温度 `-128` 显示为「—」而不是 0 °C
+- 0xCB 超过 1.5 s 未更新时表格转灰并在状态行标出已停更秒数；配置执行期间总线暂停，属正常现象
+- 配置（`SERVO_CONFIG 0x0E`）：选关节 + 操作 + 数值，改 ID / 舵机偏置 / 标定零点 / 清除标定 / 力矩开关。改 ID、标定、清标定都有二次确认
+- 0x0E 是同步命令：上位机等 1.2 s 且**不重发**，因为 MCU 会在通信任务里阻塞等待舵机应答（最长 1 s）；重发只会撞上 `0x05` 忙
+- 机械臂使能时配置与「保存标定区」自动禁用；固件会再挡一次（返回 `0x05`）
+- 改 ID / 零点只写 RAM，页面明确提示还要点「保存标定区（scope=1）」——这是现场“改完正常、重启掉轴”的常见原因
+- 保护阈值（`SET_PARAM 0x60–0x64`）：过温、欠压、过压、堵转误差、堵转时间；欠压 ≥ 过压时本地先拦一次，避免整条请求被固件拒绝。写入即时生效，落盘另点「保存参数区」
 
 **PID 调参**
 - 顶栏「PID 调参」进入独立页面，离开或急停时自动停车并返回主界面
@@ -54,6 +67,7 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 **存储器**
 - 顶栏「存储器」进入独立页面，进入即发一次 `STORAGE_QUERY`
 - 存储状态：8 个标志位按协议 bit 顺序显示，另有参数/标定 seq、累计启动、日志占用、擦除次数、上次保存秒数
+- 参数与标定：「读取并查看」发 `GET_PARAM 0x0F`，MCU 按 5 块 × 10 条回 `REPORT_PARAM 0xCC`，弹窗按参数区 / 标定区 / 舵机 ID / 舵机零点 / 只读分组显示 PID、限幅、标定、机械臂保护阈值和舵机地址/零点。读的是 **RAM 当前值**，写入后未保存的修改也会显示；是否落盘看「存储状态」的 bit0。分片跳号或 1 s 没有新块即中止，不显示带空洞的表
 - 日志导出：来源（运行日志/故障事件）+ 起始 seq，按 20 Hz 接收，结束帧关闭导出；按 seq 去重（导出期间环还在增长）；记录可保存为 CSV
 - 崩溃现场：slot 0–15 或「最新有效」，按 offset 拼接、按总长判定完成；分片不连续直接中止并提示重读；十六进制 + ASCII 显示，可保存 `.bin`；勾选「读后标记已读」会在完成后刷新 `REPORT_STORAGE` bit6
 - 清空：`LOG_CLEAR` 带二次确认（崩溃现场是唯一副本），可选运行日志 / 故障事件 / 崩溃现场 / 全部
@@ -70,14 +84,14 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 
 | 方向 | 内容 |
 |------|------|
-| 下行 | `SET_VELOCITY` 50 Hz、`SET_ARM_JOINTS`、`SET_GRIPPER`（ACK）、`SET_ENABLE`（ACK）、`SET_PARAM` PID 增益与标定/限幅 id（ACK）、`ESTOP`（ACK）、`CLEAR_FAULT`（ACK）、`PARAM_SAVE` / `PARAM_RESET` / `STORAGE_QUERY` / `LOG_EXPORT` / `CRASH_READ` / `LOG_CLEAR`（ACK） |
-| 上行 | `REPORT_ODOM` 50 Hz、`REPORT_WHEEL_SPEED` 50 Hz、`REPORT_WHEEL_DUTY` 50 Hz、`REPORT_ARM` 20 Hz、`REPORT_STATUS` 10 Hz、`REPORT_STORAGE`、`REPORT_LOG`、`REPORT_CRASH`、`REPORT_EVENT`、`HEARTBEAT` 10 Hz、所有 ACK |
+| 下行 | `SET_VELOCITY` 50 Hz、`SET_ARM_JOINTS`（未 ACK；跟随开启时 10 Hz）、`SET_GRIPPER`（ACK）、`SET_ENABLE`（ACK）、`SET_PARAM` PID 增益、标定/限幅 id 与机械臂保护阈值 `0x60~0x64`（ACK）、`SERVO_CONFIG 0x0E`（ACK，同步）、`GET_PARAM 0x0F`（ACK）、`ESTOP`（ACK）、`CLEAR_FAULT`（ACK）、`PARAM_SAVE` / `PARAM_RESET` / `STORAGE_QUERY` / `LOG_EXPORT` / `CRASH_READ` / `LOG_CLEAR`（ACK） |
+| 上行 | `REPORT_ODOM` 50 Hz、`REPORT_WHEEL_SPEED` 50 Hz、`REPORT_WHEEL_DUTY` 50 Hz、`REPORT_ARM` 20 Hz、`REPORT_ARM_STATUS` 2 Hz、`REPORT_STATUS` 10 Hz、`REPORT_PARAM`（应答 `GET_PARAM`）、`REPORT_STORAGE`、`REPORT_LOG`、`REPORT_CRASH`、`REPORT_EVENT`、`HEARTBEAT` 10 Hz、所有 ACK |
 | 界面未用 | 台架测试占空比 `0x30~0x33` 只在 `tools/bench/wheel_tune.py` 里用；`0x41` 死区开关固件尚未实现 |
 
-**固件实现状态**：`0x08~0x0D` 存储命令与 `REPORT_STORAGE`/`REPORT_LOG`/`REPORT_CRASH` 已实现（见 [storage-design.md](../../docs/architecture/storage-design.md) 第 12 节），存储器页可直接对真机使用。`SET_PARAM` 的标定/限幅 id（`0x01`/`0x02`/`0x10~0x12`/`0x50~0x5F`）也已实现：标定值写入 RAM 后由控制任务在下一个 10 ms 节拍推入底盘服务，热更新立即生效；标定类 id 在底盘使能时返回 `0x02`，页面已经据此禁用控件。`0x41` 死区总开关仍未实现（替换为按轮设置的 `0x54~0x5B`），本页不使用该 id。
+**固件实现状态**：`0x08~0x0D` 存储命令与 `REPORT_STORAGE`/`REPORT_LOG`/`REPORT_CRASH` 已实现（见 [storage-design.md](../../docs/architecture/storage-design.md) 第 12 节），`GET_PARAM 0x0F` / `REPORT_PARAM 0xCC` 也已实现（协议 §5.7），存储器页可直接对真机使用。`SET_PARAM` 的标定/限幅 id（`0x01`/`0x02`/`0x10~0x12`/`0x50~0x5F`）也已实现：标定值写入 RAM 后由控制任务在下一个 10 ms 节拍推入底盘服务，热更新立即生效；标定类 id 在底盘使能时返回 `0x02`，页面已经据此禁用控件。`0x41` 死区总开关仍未实现（替换为按轮设置的 `0x54~0x5B`），本页不使用该 id。
 
-时序：ACK 超时 200 ms、最多重试 3 次；解析器在 50 ms 无字节后复位（协议 §9）。
-`LEN` 下限取 2 而不是 3 —— ESTOP 就是 7 字节空负载帧。
+时序：ACK 超时 200 ms、最多重试 3 次；`SERVO_CONFIG 0x0E` 例外——等 1.2 s、不重发（协议 §5.6.1）。
+解析器在 50 ms 无字节后复位（协议 §9）。`LEN` 下限取 2 而不是 3 —— ESTOP 就是 7 字节空负载帧。
 
 ## 内置模拟器
 
@@ -86,10 +100,14 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 速度指令 200 ms 断流后自动归零，ESTOP 置故障 `0x0501` 并上报事件。
 模拟器发出的帧也会先用本地 `FrameParser` 解析一遍再交给界面，顺便做了编解码自检。
 
-模拟器也实现了存储子系统：`PARAM_SAVE`/`PARAM_RESET` 更新脏标志与 seq 并发 `REPORT_STORAGE`；
+模拟器也实现了存储子系统：`PARAM_SAVE`/`PARAM_RESET` 更新脏标志与 seq 并发 `REPORT_STORAGE`；`GET_PARAM` 按固件同样的 48 条记录、每 10 ms 一块回 `REPORT_PARAM`；
 `LOG_EXPORT` 从种子日志环按 50 ms 一条推送、末尾发结束帧；`CRASH_READ` 推送一条 1 KB 的假现场
 （32 B 一片）；`LOG_CLEAR` 清空对应区。标定 id 与限幅 id 按协议范围校验、使能时拒绝。
 存储区放在 RAM 里，重启模拟器即恢复种子数据。
+
+模拟器同样实现了舵机侧：`SERVO_CONFIG` 校验关节/操作/数值、拒绝重复 ID、使能时回 `0x05`，
+`CALIBRATE` 后该轴读数归零；每 500 ms 发一帧 27 字节 `REPORT_ARM_STATUS`（电压约 7.4 V、
+温度 31–36 °C、无故障）。保护阈值 `0x60~0x64` 与固件同范围校验，欠压 ≥ 过压回 `0x01`。
 
 固件已经实现同一套协议（`02_Service/service_proto` + `05_Middlewares/protocol`），
 真机联调优先用 [`tools/bench/proto_loop.py`](../bench/proto_loop.py)：它不看界面，直接给出 PASS/FAIL。
@@ -100,14 +118,19 @@ python tools/host_gui/main.py --screenshot shot.png --size 1440x900
 python tools/host_gui/test_protocol.py
 ```
 
-38 个用例，覆盖 CRC-16/CCITT-FALSE、协议 §10 的三条测试向量、CRC 错误后的重同步、
+52 个用例，覆盖 CRC-16/CCITT-FALSE、协议 §10 的测试向量（含 0x0E 的两条）、CRC 错误后的重同步、
 非法 `LEN`（含 `0xAA` 字节引起的假帧头）、随机分片、半帧复位、ACK 字段、上报结构、
-轮速与占空比上报、PID/标定/限幅 ID 分组、`REPORT_STORAGE` 标志位顺序、崩溃分片拼接
-（完整、offset 跳变、slot 切换、非法长度、reset）。
+轮速与占空比上报、PID/标定/限幅 ID 分组、机械臂保护阈值 ID、`REPORT_ARM_STATUS` 27 字节往返与
+`-128` 温度、`REPORT_STORAGE` 标志位顺序、崩溃分片拼接（完整、offset 跳变、slot 切换、非法长度、reset）、
+`REPORT_PARAM` 记录解码与分片重组（顺序、跳号丢弃、chunk 0 重开）。
 
 ## 已知缺口
 
-- 协议 v1 没有 `GET_PARAM`：标定页显示的是编译期默认值，不是设备当前值；断电重连后页面回到默认值，写入前请先确认页面上不是旧值。
+- 参数回读只在存储器页：标定页与机械臂舵机页不会用 `GET_PARAM` 自动回填，页面显示的是编译期默认值或上一次写入的值；写入前先到存储器页「读取并查看」核对。舵机页仍是盲写——0xCB 不返回 ID/零点，读取要另走存储器页。
+- 舵机**偏置**（0x0E op 0x02）存在舵机内部，板上不记录，`GET_PARAM` 也读不到；`GET_PARAM` 的「舵机零点」是板上标定区的 `offset`，两者不是同一个东西。
+- 0x0E 执行期间通信任务阻塞（最长 1 s），这一秒内关节表停在旧值、其他 ACK 也可能迟到；页面用「执行中…」提示，不要在这时叠加关键命令。
+- 0x0E 不重发：ACK 丢失时页面会报失败，但配置可能已经生效。改 ID 后先核对再重试，别把“无应答”当成“没执行”。
+- `SET_ARM_JOINTS` 没有 ACK，也没有移动时间字段：单帧丢失只能靠下一次拖动补；跟随下的 200 ms 是固件按“连发”推断的，想手动设固定值需要新增协议参数。
 - 模拟器对任何指令都应答，因此 ACK 超时 / 重试路径无法在 `--sim` 下复现，需要真实硬件或人为断链验证。
 - 模拟器的轮速是差速近似，不模拟编码器量化与 PID 动态；调参效果只能在真机上看。
 - 调参页面限速 150 mm/s、ω=0 是**界面约束**，固件不限制绕过页面的速度指令。

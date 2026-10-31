@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFrame,
 from . import protocol as p
 from .calibration import CalibrationPage
 from .protocol import Cmd, Report, Result, describe
+from .servo import ServoPage
 from .simulator import SimulatorLink
 from .storage import StoragePage
 from .transport import BAUDRATES, DEFAULT_BAUD, SerialLink, available_ports
@@ -46,9 +47,18 @@ from .widgets import (ACCENT, BASELINE, BORDER, CRITICAL, GOOD, INK, INK_2,
 TX_PERIOD_MS = 20
 ACK_TIMEOUT_S = 0.200
 ACK_RETRIES = 3
+# 0x0E is the one synchronous command: the comm task waits while the bus
+# driver talks to the servo, up to APP_SERVO_CONFIG_TIMEOUT_MS = 1000 ms
+# (protocol.md 5.6.1). The 200 ms/3 retry policy would retransmit into a busy
+# handler, so it gets a longer wait and no retry.
+ACK_POLICY = {Cmd.SERVO_CONFIG: (1.2, 0)}
 MAX_V = 500          # mm/s, slider range
 MAX_W = 1500         # mrad/s, slider range
 MAX_JOINT = 9000     # centi-degrees, +-90 deg
+# The servo bus dispatches at most one move per slot and the vendor protocol
+# requires >=100 ms between frames, so faster streaming would just be dropped.
+ARM_STREAM_PERIOD_S = 0.100
+ARM_SYNC_FRESH_S = 1.0   # REPORT_ARM age accepted when seeding sliders
 LOG_COLORS = {"tx": INK_2, "rx": MUTED, "ok": GOOD, "warn": WARNING,
               "error": CRITICAL, "info": INK}
 
@@ -118,6 +128,15 @@ QPlainTextEdit#log {{ background: {SURFACE_2}; border: 1px solid {SURFACE_3};
                       border-radius: 8px; font-family: "Consolas", monospace;
                       font-size: 10px; padding: 6px;
                       selection-background-color: #2f3a48; }}
+QDialog {{ background: {PAGE}; }}
+QTableWidget {{ background: {SURFACE_2}; alternate-background-color: {SURFACE};
+                border: 1px solid {SURFACE_3}; border-radius: 8px;
+                gridline-color: {SURFACE_3}; font-size: 11px; }}
+QTableWidget::item {{ padding: 3px 6px; }}
+QTableWidget::item:selected {{ background: #2f3a48; color: {INK}; }}
+QHeaderView::section {{ background: {SURFACE_3}; color: {MUTED};
+                        border: none; border-bottom: 1px solid {BORDER};
+                        padding: 4px 6px; font-size: 10px; }}
 QFrame#banner {{ background: rgba(208, 59, 59, 0.14);
                  border: 1px solid {CRITICAL}; border-radius: 10px; }}
 QLabel#bannerText {{ color: #ff9d9d; font-size: 12px; font-weight: 600; }}
@@ -141,6 +160,8 @@ class _Pending:
     retries: int
     on_ok: Callable[[], None] | None
     on_fail: Callable[[str], None] | None
+    timeout_s: float = ACK_TIMEOUT_S
+    max_retries: int = ACK_RETRIES
 
 
 def _button(text: str, kind: str | None = None, checkable: bool = False,
@@ -177,6 +198,7 @@ class HostWindow(QMainWindow):
         self.tuning_active = False
         self.calib_active = False
         self.storage_active = False
+        self.servo_active = False
         self._closing = False
         self.v_target = 0
         self.w_target = 0
@@ -192,16 +214,21 @@ class HostWindow(QMainWindow):
         self._suppress_enable = False
         self._last_velocity_log: tuple[int, int] | None = None
         self._last_report_log = 0.0
+        self._arm_last_sent: tuple[int, ...] | None = None
+        self._arm_stream_at = 0.0
+        self._arm_stream_log_at = 0.0
 
         # latest telemetry
         self.last_odom = None
         self.last_arm = None
+        self.last_arm_status = None
         self.last_status = None
         self.last_beat = None
         self.last_wheel_speed = None
         self.last_storage = None
         self.odom_at = 0.0
         self.arm_at = 0.0
+        self.arm_status_at = 0.0
         self.status_at = 0.0
         self.beat_at = 0.0
         self.wheel_at = 0.0
@@ -259,6 +286,10 @@ class HostWindow(QMainWindow):
         self.storage_page = StoragePage(self)
         self.storage_page.backRequested.connect(self._close_storage)
         self.pages.addWidget(self.storage_page)
+
+        self.servo_page = ServoPage(self)
+        self.servo_page.backRequested.connect(self._close_servo)
+        self.pages.addWidget(self.servo_page)
 
         outer.addWidget(self.pages, 1)
 
@@ -318,6 +349,11 @@ class HostWindow(QMainWindow):
         self.calib_btn.setToolTip("几何、编码器比例、起转占空比与轮方向")
         self.calib_btn.clicked.connect(self._open_calibration)
 
+        self.servo_btn = _button("机械臂", "ghost")
+        self.servo_btn.setFixedWidth(68)
+        self.servo_btn.setToolTip("总线舵机：角度/温度/故障回读、改 ID、零点标定")
+        self.servo_btn.clicked.connect(self._open_servo)
+
         self.storage_btn = _button("存储器", "ghost")
         self.storage_btn.setFixedWidth(68)
         self.storage_btn.setToolTip("存储状态、日志导出、崩溃现场读取")
@@ -335,6 +371,7 @@ class HostWindow(QMainWindow):
         layout.addWidget(self.sim_btn)
         layout.addWidget(self.tuning_btn)
         layout.addWidget(self.calib_btn)
+        layout.addWidget(self.servo_btn)
         layout.addWidget(self.storage_btn)
         layout.addSpacing(8)
         layout.addWidget(self.badge)
@@ -459,7 +496,13 @@ class HostWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
 
-        card = Card("机械臂", "SET_ARM_JOINTS · 按需下发")
+        card = Card("机械臂", "SET_ARM_JOINTS · 拖动即跟随")
+        self.arm_live_check = QCheckBox("实时跟随")
+        self.arm_live_check.setChecked(True)
+        self.arm_live_check.setToolTip(
+            "拖动关节滑杆时每 100 ms 下发一次 SET_ARM_JOINTS（总线帧间隔下限）\n"
+            "取消勾选后只有点「下发关节角度」才发送")
+        card.add_header_widget(self.arm_live_check)
         self.joint_rows: list[SliderRow] = []
         for index in range(6):
             row = SliderRow(f"关节 {index + 1}", -MAX_JOINT, MAX_JOINT, 0,
@@ -666,11 +709,13 @@ class HostWindow(QMainWindow):
             self._close_tuning()
             self._close_calibration()
             self._close_storage()
+            self._close_servo()
             self._cleanup_dead_link()
             self.connected = False
             self.storage_page.on_link_lost()
             self.pending.clear()
             self.enabled = False
+            self._arm_last_sent = None
             self.v_target = self.w_target = 0
             self._suppress_enable = True
             self.enable_btn.setChecked(False)
@@ -720,10 +765,13 @@ class HostWindow(QMainWindow):
 
         if acked:
             label = _cmd_name(cmd)
+            timeout_s, max_retries = ACK_POLICY.get(
+                cmd, (ACK_TIMEOUT_S, ACK_RETRIES))
             self.pending[(int(cmd), seq)] = _Pending(
                 raw=raw, label=label,
-                deadline=time.monotonic() + ACK_TIMEOUT_S,
-                retries=0, on_ok=on_ok, on_fail=on_fail)
+                deadline=time.monotonic() + timeout_s,
+                retries=0, on_ok=on_ok, on_fail=on_fail,
+                timeout_s=timeout_s, max_retries=max_retries)
         if not quiet:
             self._log_tx(cmd, seq, payload)
         return seq
@@ -741,6 +789,30 @@ class HostWindow(QMainWindow):
         if (v, w) != self._last_velocity_log:
             self._last_velocity_log = (v, w)
             self._log(f"→ SET_VELOCITY v={v} mm/s ω={w} mrad/s (周期下发)", "tx")
+        self._arm_tick(time.monotonic())
+
+    def _arm_tick(self, now: float) -> None:
+        """Stream the slider pose while 实时跟随 is on.
+
+        Only fires when the pose actually changed, so a still arm costs no
+        bus traffic. SET_ARM_JOINTS is unacknowledged by design (12 bytes,
+        idempotent); feedback arrives on REPORT_ARM 20 Hz.
+        """
+        if not (self.enabled and self.arm_live_check.isChecked()):
+            return
+        pose = tuple(row.value() for row in self.joint_rows)
+        if pose == self._arm_last_sent:
+            return
+        if now - self._arm_stream_at < ARM_STREAM_PERIOD_S:
+            return
+        self._arm_stream_at = now
+        self._arm_last_sent = pose
+        self._send(Cmd.SET_ARM_JOINTS, p.set_arm_joints_payload(pose),
+                   quiet=True)
+        if now - self._arm_stream_log_at >= 1.0:
+            self._arm_stream_log_at = now
+            detail = " ".join(f"{a / 100:.1f}°" for a in pose)
+            self._log(f"→ SET_ARM_JOINTS {detail} (实时跟随)", "tx")
 
     def _log_tx(self, cmd: int, seq: int, payload: bytes) -> None:
         name = _cmd_name(cmd)
@@ -756,6 +828,13 @@ class HostWindow(QMainWindow):
         elif cmd == Cmd.SET_PARAM:
             param_id, value = struct.unpack("<Bi", payload)
             detail = f"{p.PARAM_NAMES.get(param_id, hex(param_id))} = {value}"
+        elif cmd == Cmd.SERVO_CONFIG:
+            joint, op, value = struct.unpack("<BBi", payload)
+            name = (p.SERVO_JOINT_NAMES[joint]
+                    if joint < p.SERVO_JOINT_COUNT else f"关节 {joint}")
+            detail = f"{name} {p.SERVO_OP_NAMES.get(op, hex(op))}"
+            if op in (p.SERVO_OP_SET_ID, p.SERVO_OP_SET_BIAS, p.SERVO_OP_TORQUE):
+                detail += f" = {value}"
         elif cmd == Cmd.CLEAR_FAULT:
             detail = f"0x{struct.unpack('<H', payload)[0]:04X}"
         suffix = f" {detail}" if detail else ""
@@ -769,9 +848,9 @@ class HostWindow(QMainWindow):
         for key, pending in list(self.pending.items()):
             if now < pending.deadline:
                 continue
-            if pending.retries < ACK_RETRIES:
+            if pending.retries < pending.max_retries:
                 pending.retries += 1
-                pending.deadline = now + ACK_TIMEOUT_S
+                pending.deadline = now + pending.timeout_s
                 if self.link is not None:
                     self.link.send(pending.raw)
                 self._log(f"重发 {pending.label}（第 {pending.retries} 次）", "warn")
@@ -779,8 +858,9 @@ class HostWindow(QMainWindow):
                 expired.append(key)
         for key in expired:
             pending = self.pending.pop(key)
-            self._log(f"{pending.label} 未收到应答，已重试 {ACK_RETRIES} 次",
-                      "error")
+            attempts = (f"已重试 {pending.max_retries} 次"
+                        if pending.max_retries else "未重试")
+            self._log(f"{pending.label} 未收到应答，{attempts}", "error")
             if pending.on_fail:
                 pending.on_fail("无应答")
 
@@ -807,6 +887,11 @@ class HostWindow(QMainWindow):
             if data:
                 self.last_arm = data
                 self.arm_at = now
+        elif cmd == Report.ARM_STATUS:
+            data = p.decode_arm_status(frame.payload)
+            if data:
+                self.last_arm_status = data
+                self.arm_status_at = now
         elif cmd == Report.STATUS:
             data = p.decode_status(frame.payload)
             if data:
@@ -839,6 +924,10 @@ class HostWindow(QMainWindow):
             data = p.decode_crash(frame.payload)
             if data:
                 self.storage_page.on_crash(data)
+        elif cmd == Report.PARAM:
+            data = p.decode_param(frame.payload)
+            if data:
+                self.storage_page.on_param(data)
 
         if self.show_reports.isChecked() and now - self._last_report_log >= 0.1:
             self._last_report_log = now
@@ -915,7 +1004,10 @@ class HostWindow(QMainWindow):
             return
         self.enabled = requested
         self._log("电机已使能" if requested else "电机已失能", "ok")
-        if not requested:
+        if requested:
+            self._sync_arm_targets()
+        else:
+            self._arm_last_sent = None
             self.v_target = self.w_target = 0
             self.v_row.setValue(0)
             self.w_row.setValue(0)
@@ -933,6 +1025,7 @@ class HostWindow(QMainWindow):
         self.grip_open_btn.setEnabled(motion)
         self.grip_close_btn.setEnabled(motion)
         self.send_arm_btn.setEnabled(motion)
+        self.arm_live_check.setEnabled(motion)
         self.stop_btn.setEnabled(self.connected and not self.estopped)
         self.estop_btn.setEnabled(self.connected and not self.estopped)
         self.enable_btn.setEnabled(self.connected and not self.estopped)
@@ -978,6 +1071,7 @@ class HostWindow(QMainWindow):
         if not self.connected or self.tuning_active:
             return
         self.stop_motion()
+        self._close_servo()
         self.tuning_active = True
         self.pages.setCurrentWidget(self.tuning_page)
         self.tuning_page.on_enter()
@@ -997,6 +1091,7 @@ class HostWindow(QMainWindow):
             return
         self.stop_motion()
         self._close_tuning()
+        self._close_servo()
         self.calib_active = True
         self.pages.setCurrentWidget(self.calib_page)
         self.calib_page.on_enter()
@@ -1015,6 +1110,7 @@ class HostWindow(QMainWindow):
             return
         self.stop_motion()
         self._close_tuning()
+        self._close_servo()
         self.storage_active = True
         self.pages.setCurrentWidget(self.storage_page)
         self.storage_page.on_enter()
@@ -1027,6 +1123,26 @@ class HostWindow(QMainWindow):
         self.storage_page.on_leave()
         self.pages.setCurrentWidget(self.main_page)
         self._log("离开存储器页", "info")
+
+    def _open_servo(self) -> None:
+        if not self.connected or self.servo_active:
+            return
+        self.stop_motion()
+        self._close_tuning()
+        self._close_calibration()
+        self._close_storage()
+        self.servo_active = True
+        self.pages.setCurrentWidget(self.servo_page)
+        self.servo_page.on_enter()
+        self._log("进入机械臂页：失能后才能改 ID / 标定零点", "info")
+
+    def _close_servo(self) -> None:
+        if not self.servo_active:
+            return
+        self.servo_active = False
+        self.servo_page.on_leave()
+        self.pages.setCurrentWidget(self.main_page)
+        self._log("离开机械臂页", "info")
 
     def request_enable(self, checked: bool) -> None:
         """Enable/disable from the tuning page; the main button mirrors it."""
@@ -1060,6 +1176,7 @@ class HostWindow(QMainWindow):
         already = self.estopped
         self.estopped = True
         self.enabled = False
+        self._arm_last_sent = None
         self.v_target = self.w_target = 0
         self._set_velocity_sliders(0, 0)
         self.joystick.reset()
@@ -1100,7 +1217,34 @@ class HostWindow(QMainWindow):
 
     def _send_arm(self) -> None:
         angles = [row.value() for row in self.joint_rows]
+        self._arm_last_sent = tuple(angles)
+        self._arm_stream_at = time.monotonic()
         self._send(Cmd.SET_ARM_JOINTS, p.set_arm_joints_payload(angles))
+
+    def _sync_arm_targets(self) -> None:
+        """Seed the joint sliders with the arm's measured pose on enable.
+
+        SET_ARM_JOINTS always commands all six joints at once, so streaming
+        from sliders that still read 0 would slam the arm the first time the
+        operator touches any joint. With fresh REPORT_ARM (20 Hz) the sliders
+        start where the arm actually is; either way the pose is recorded as
+        already sent so enabling never fires an unsolicited move.
+        """
+        arm = self.last_arm
+        if arm is not None and time.monotonic() - self.arm_at <= ARM_SYNC_FRESH_S:
+            for row, angle in zip(self.joint_rows, arm["angles_cdeg"]):
+                row.setValue(int(angle))
+            self._log("关节滑杆已对齐实际角度", "info")
+        else:
+            # Without a measured pose the sliders are blind: streaming them
+            # could drag five joints to 0 deg while the operator moves the
+            # sixth. Default to safe (off), but leave the box clickable so a
+            # deliberate jog is still possible.
+            self.arm_live_check.setChecked(False)
+            self._log("没有新鲜的 REPORT_ARM，已关闭实时跟随；确认实际姿态后可手动勾选，"
+                      "或直接点「下发关节角度」", "warn")
+        self._arm_last_sent = tuple(row.value() for row in self.joint_rows)
+        self._arm_stream_at = time.monotonic()
 
     def _send_gripper(self, action: int) -> None:
         force = self.gripper_row.value()
@@ -1149,11 +1293,12 @@ class HostWindow(QMainWindow):
                      self.tile_theta):
             tile.set_value("—", sub="", tint=None)
         self.last_odom = self.last_arm = None
+        self.last_arm_status = None
         self.last_status = self.last_beat = None
         self.last_wheel_speed = None
         self.last_storage = None
         self.odom_at = self.arm_at = self.status_at = self.beat_at = 0.0
-        self.wheel_at = 0.0
+        self.arm_status_at = self.wheel_at = 0.0
         for row in self.joint_rows:
             row.set_actual("实际 —")
         self.gripper_row.set_actual("实际 —")

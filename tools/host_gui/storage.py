@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Storage page: read back what the MCU saved (protocol.md 5.5).
+"""Storage page: read back what the MCU saved (protocol.md 5.5, 5.7).
 
-Three readers live here, all of them cache-free:
+Four readers live here, all of them cache-free:
   * STORAGE_QUERY  -> one REPORT_STORAGE frame with the flags and lifetime
     counters. This is the only way to know a PARAM_SAVE really finished.
   * LOG_EXPORT     -> REPORT_LOG at up to 20 Hz; the end frame (flags bit1)
@@ -10,6 +10,10 @@ Three readers live here, all of them cache-free:
   * CRASH_READ     -> REPORT_CRASH chunks with no end frame; the record is
     complete at offset + total. A gap aborts the read instead of showing a
     dump with a hole in it.
+  * GET_PARAM      -> REPORT_PARAM chunks, one {kind, id, value} record each;
+    the last chunk carries the end flag. These are RAM values, so a written
+    but unsaved parameter shows up here as well -- REPORT_STORAGE bit0 says
+    whether it reached flash.
 
 LOG_CLEAR is behind a confirmation dialog: the crash record is the only copy
 of that event.
@@ -23,13 +27,15 @@ import html
 import time
 
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QGridLayout,
-                               QHBoxLayout, QLabel, QMessageBox,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
+                               QDialog, QFileDialog, QGridLayout,
+                               QHBoxLayout, QHeaderView, QLabel, QMessageBox,
                                QPlainTextEdit, QPushButton, QSpinBox,
-                               QVBoxLayout, QWidget)
+                               QTableWidget, QTableWidgetItem, QVBoxLayout,
+                               QWidget)
 
 from . import protocol as p
-from .protocol import Cmd, CrashAssembler
+from .protocol import Cmd, CrashAssembler, ParamAssembler
 from .widgets import (CRITICAL, GOOD, INK, INK_2, MUTED, WARNING, Card,
                       StatTile)
 
@@ -37,6 +43,8 @@ from .widgets import (CRITICAL, GOOD, INK, INK_2, MUTED, WARNING, Card,
 # the page calls the transfer dead (firmware stops on 500 ms of link idle).
 EXPORT_TIMEOUT_S = 1.5
 CRASH_TIMEOUT_S = 1.0
+# The dump is five 10 ms ticks; a 1 s gap means it was cut, not slow.
+PARAM_TIMEOUT_S = 1.0
 MAX_RECORDS = 5000
 
 LEVEL_COLOURS = {0: MUTED, 1: INK_2, 2: WARNING, 3: CRITICAL}
@@ -49,6 +57,111 @@ def _button(text: str, kind: str | None = None, height: int = 32) -> QPushButton
     button.setMinimumHeight(height)
     button.setCursor(Qt.PointingHandCursor)
     return button
+
+
+def _param_row(record: dict) -> tuple[str, str, str, str]:
+    """(group, name, value, unit) for one 0xCC record.
+
+    Values stay in the unit the wire uses; only x1000 encodings and the
+    calibrated zero are converted here so the table is readable, not a dump
+    of raw integers.
+    """
+    kind = record["kind"]
+    param_id = record["id"]
+    value = record["value"]
+    group = p.PARAM_KIND_NAMES.get(kind, f"类型 {kind}")
+
+    if kind == p.PARAM_KIND_SERVO_ID:
+        name = p.SERVO_JOINT_NAMES[param_id] if 0 <= param_id < 6 \
+            else f"关节 {param_id}"
+        return group, f"{name} 地址", str(value), ""
+
+    if kind == p.PARAM_KIND_SERVO_OFFSET:
+        name = p.SERVO_JOINT_NAMES[param_id] if 0 <= param_id < 6 \
+            else f"关节 {param_id}"
+        return group, f"{name} 零点", f"{value / 100:.2f}", "°"
+
+    if kind == p.PARAM_KIND_INFO:
+        names = {
+            p.PARAM_INFO_WHEELBASE_MM: ("轴距（只读）", "mm"),
+            p.PARAM_INFO_STALL_MARGIN_MS: ("堵转稳定余量", "ms"),
+        }
+        name, unit = names.get(param_id, (f"0x{param_id:02X}", ""))
+        return group, name, str(value), unit
+
+    name = p.PARAM_NAMES.get(param_id, f"0x{param_id:02X}")
+
+    if 0x20 <= param_id <= 0x2B:                 # PID gain, x1000
+        return group, name, f"{value / 1000:.3f}", ""
+    if 0x50 <= param_id <= 0x53:                 # counts per mm, x1000
+        return group, name, f"{value / 1000:.3f}", "counts/mm"
+    if 0x54 <= param_id <= 0x5B:                 # break-away duty, permille
+        return group, name, str(value), "‰"
+    if 0x5C <= param_id <= 0x5F:                 # wheel direction
+        return group, name, "正向" if value >= 0 else "反向", ""
+
+    if param_id == 0x40:
+        return group, name, p.LOG_LEVEL_NAMES.get(value, str(value)), ""
+    if param_id == 0x63:                         # stall error, 0.01 degree
+        return group, name, f"{value / 100:.2f}", "°"
+
+    unit = {0x01: "mm", 0x02: "mm", 0x10: "ms", 0x11: "mm/s",
+            0x12: "mrad/s", 0x60: "°C", 0x61: "mV", 0x62: "mV",
+            0x64: "ms"}.get(param_id, "")
+    return group, name, str(value), unit
+
+
+class _ParamDialog(QDialog):
+    """Read-only table of one GET_PARAM dump."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("参数与标定（RAM 当前值）")
+        self.resize(660, 620)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        note = QLabel(
+            "GET_PARAM 读的是 MCU RAM：写入后尚未保存的值也会显示在这里。"
+            "是否已落盘看「存储状态」的 bit0（参数已落盘）。")
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["分组", "参数", "值", "单位"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        layout.addWidget(self.table, 1)
+
+        row = QHBoxLayout()
+        self.status = QLabel("接收中…")
+        self.status.setObjectName("muted")
+        row.addWidget(self.status, 1)
+        close = _button("关闭", "ghost", height=28)
+        close.clicked.connect(self.close)
+        row.addWidget(close)
+        layout.addLayout(row)
+
+    def set_records(self, records: list[dict]) -> None:
+        self.table.setRowCount(0)
+        for record in records:
+            group, name, value, unit = _param_row(record)
+            index = self.table.rowCount()
+            self.table.insertRow(index)
+            for column, text in enumerate((group, name, value, unit)):
+                item = QTableWidgetItem(text)
+                if column >= 2:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.table.setItem(index, column, item)
 
 
 class StoragePage(QWidget):
@@ -65,6 +178,10 @@ class StoragePage(QWidget):
         self.crash = CrashAssembler()
         self.crash_active = False
         self.crash_last_at = 0.0
+        self.params = ParamAssembler()
+        self.params_active = False
+        self.params_last_at = 0.0
+        self.param_view: _ParamDialog | None = None
         self._build_ui()
         self._build_timer()
 
@@ -81,7 +198,8 @@ class StoragePage(QWidget):
         back.clicked.connect(self.backRequested.emit)
         title = QLabel("存储器")
         title.setObjectName("appTitle")
-        subtitle = QLabel("STORAGE_QUERY 0x0A · LOG_EXPORT 0x0B · CRASH_READ 0x0C")
+        subtitle = QLabel("STORAGE_QUERY 0x0A · LOG_EXPORT 0x0B · "
+                         "CRASH_READ 0x0C · GET_PARAM 0x0F")
         subtitle.setObjectName("appSub")
         header.addWidget(back)
         header.addWidget(title)
@@ -230,6 +348,20 @@ class StoragePage(QWidget):
         row.addWidget(self.export_status)
         export_card.body.addLayout(row)
         layout.addWidget(export_card)
+
+        params_card = Card("参数与标定", "GET_PARAM 0x0F · REPORT_PARAM 0xCC")
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.params_btn = _button("读取并查看", "primary", height=32)
+        self.params_btn.setToolTip(
+            "一次读回全部参数：PID、限幅、标定、舵机 ID/零点、只读项")
+        self.params_btn.clicked.connect(self._on_read_params)
+        row.addWidget(self.params_btn, 1)
+        self.params_status = QLabel("未读取 · 显示 RAM 当前值")
+        self.params_status.setObjectName("muted")
+        row.addWidget(self.params_status, 2)
+        params_card.body.addLayout(row)
+        layout.addWidget(params_card)
 
         records_card = Card("记录", "REPORT_LOG 0xC9 · 按 seq 去重")
         self.count_label = QLabel("0 条")
@@ -524,6 +656,96 @@ class StoragePage(QWidget):
             return
         self.host._log(f"崩溃现场已保存到 {path}（{len(data)} B）", "ok")
 
+    # ============================================================ params
+
+    def _on_read_params(self) -> None:
+        if not self.host.connected:
+            return
+        self.params.reset()
+        self.params_active = True
+        self.params_last_at = time.monotonic()
+        self.params_status.setStyleSheet("")
+        self.params_status.setText("读取中…")
+        self._update_states()
+        self.host._send(
+            Cmd.GET_PARAM, b"", acked=True,
+            on_ok=self._params_accepted,
+            on_fail=self._params_refused)
+
+    def _params_accepted(self) -> None:
+        self.params_last_at = time.monotonic()
+        self.params_status.setText("接收分片…")
+        self._show_param_view()
+
+    def _params_refused(self, reason: str) -> None:
+        if self.params.records:
+            # The ACK was lost, not the request: chunks are already arriving.
+            self.host._log(f"GET_PARAM 无 ACK（{reason}），但已收到分片", "warn")
+            return
+        self.params_active = False
+        self.params_status.setText(f"读取被拒绝：{reason}")
+        self.params_status.setStyleSheet(f"color: {CRITICAL};")
+        self._update_states()
+
+    def _show_param_view(self) -> None:
+        if self.param_view is None:
+            self.param_view = _ParamDialog(self)
+        self.param_view.set_records(self.params.records)
+        self.param_view.status.setText("接收中…")
+        self.param_view.show()
+        self.param_view.raise_()
+        self.param_view.activateWindow()
+
+    def _close_param_view(self) -> None:
+        if self.param_view is not None:
+            self.param_view.close()
+            self.param_view.deleteLater()
+            self.param_view = None
+
+    def on_param(self, chunk: dict) -> None:
+        if not self.params_active:
+            return          # a stray chunk from an aborted dump
+        self.params_last_at = time.monotonic()
+
+        outcome = self.params.feed(chunk)
+        if outcome == "gap":
+            self.params_active = False
+            self.params.reset()
+            self.params_status.setText("分片不连续，已中止；请重新读取")
+            self.params_status.setStyleSheet(f"color: {CRITICAL};")
+            if self.param_view is not None:
+                self.param_view.status.setText("分片不连续，已中止")
+            self._update_states()
+            return
+
+        if self.param_view is None:
+            # The ACK may have been lost even though the dump started.
+            self._show_param_view()
+
+        if outcome == "done":
+            self.params_active = False
+            count = len(self.params.records)
+            self.params_status.setText(f"完成 · {count} 项")
+            self.params_status.setStyleSheet(f"color: {GOOD};")
+            self.host._log(f"参数与标定已读取（{count} 项）", "ok")
+        else:
+            self.params_status.setText(
+                f"接收中 {len(self.params.records)} 项…")
+
+        self._update_param_view()
+        self._update_states()
+
+    def _update_param_view(self) -> None:
+        if self.param_view is None or not self.param_view.isVisible():
+            return
+        self.param_view.set_records(self.params.records)
+        if self.params_active:
+            self.param_view.status.setText(
+                f"接收中 · 已收到 {len(self.params.records)} 项")
+        else:
+            self.param_view.status.setText(
+                f"完成 · 共 {len(self.params.records)} 项")
+
     # ============================================================== state
 
     def on_enter(self) -> None:
@@ -538,15 +760,21 @@ class StoragePage(QWidget):
             self.crash_active = False
             self.crash.reset()
             self.crash_status.setText("已中止")
+        if self.params_active:
+            self.params_active = False
+            self.params_status.setText("已中止")
+        self._close_param_view()
         self._stop_export(quiet=True)
 
     def on_link_lost(self) -> None:
         self.export_active = False
         self.crash_active = False
         self.crash.reset()
+        self.params_active = False
         self.start_btn.setEnabled(False)
         self.export_status.setText("链路已断开")
         self.crash_status.setText("链路已断开")
+        self.params_status.setText("链路已断开")
 
     def _tick(self) -> None:
         self._update_states()
@@ -564,6 +792,13 @@ class StoragePage(QWidget):
             self.crash_status.setText("超时：记录不完整，请重新读取")
             self.crash_status.setStyleSheet(f"color: {CRITICAL};")
 
+        if self.params_active and now - self.params_last_at > PARAM_TIMEOUT_S:
+            self.params_active = False
+            self.params_status.setText("超时：参数不完整，请重新读取")
+            self.params_status.setStyleSheet(f"color: {WARNING};")
+            if self.param_view is not None:
+                self.param_view.status.setText("超时：参数不完整")
+
     def _update_states(self) -> None:
         connected = self.host.connected
         self.query_btn.setEnabled(connected)
@@ -573,3 +808,4 @@ class StoragePage(QWidget):
         self.read_btn.setEnabled(connected and not self.crash_active)
         self.save_crash_btn.setEnabled(
             not self.crash_active and len(self.crash.buffer) > 0)
+        self.params_btn.setEnabled(connected and not self.params_active)

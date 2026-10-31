@@ -12,6 +12,7 @@ environment as the GUI.
 from __future__ import annotations
 
 import random
+import struct
 import sys
 import unittest
 from pathlib import Path
@@ -287,6 +288,54 @@ class StorageTests(unittest.TestCase):
         self.assertTrue(st["save_failed"])
 
 
+class ServoTests(unittest.TestCase):
+    def test_servo_config_vector(self):
+        frame = p.build_frame(p.Cmd.SERVO_CONFIG, 7,
+                              p.servo_config_payload(2, p.SERVO_OP_SET_ID, 7))
+        self.assertEqual(frame, p.VECTOR_SERVO_CONFIG)
+        parsed = p.FrameParser().feed(p.VECTOR_SERVO_CONFIG)[0]
+        self.assertEqual(parsed.payload, bytes.fromhex("02 01 07 00 00 00"))
+
+    def test_calibrate_frame_matches_protocol_md(self):
+        raw = p.build_frame(p.Cmd.SERVO_CONFIG, 8,
+                            p.servo_config_payload(0, p.SERVO_OP_CALIBRATE))
+        self.assertEqual(raw.hex(" ").upper(),
+                         "AA 55 08 0E 08 00 03 00 00 00 00 E3 D2")
+
+    def test_joint_out_of_range_is_rejected(self):
+        with self.assertRaises(ValueError):
+            p.servo_config_payload(6, p.SERVO_OP_SET_ID, 1)
+
+    def test_arm_status_round_trip(self):
+        import struct
+        body = struct.pack("<BH", p.ARM_FLAG_ENABLED | p.ARM_FLAG_OFFLINE, 7400)
+        for index in range(p.SERVO_JOINT_COUNT):
+            body += struct.pack("<hbB", index * 100,
+                                -128 if index == 1 else 25 + index,
+                                0x01 if index == 2 else 0)
+        self.assertEqual(len(body), 27)
+        status = p.decode_arm_status(body)
+        self.assertTrue(status["enabled"])
+        self.assertTrue(status["offline"])
+        self.assertFalse(status["faulted"])
+        self.assertEqual(status["rail_mv"], 7400)
+        self.assertEqual(status["joints"][0]["angle_cdeg"], 0)
+        self.assertFalse(status["joints"][1]["temp_valid"])
+        self.assertTrue(status["joints"][2]["faults"] != "—")
+        self.assertIsNone(p.decode_arm_status(b"\x00" * 26))
+
+    def test_arm_fault_codes_are_named(self):
+        for code in (0x0304, 0x0402, 0x0403):
+            self.assertIn(code, p.FAULT_NAMES)
+
+    def test_arm_param_ids_are_named(self):
+        self.assertEqual(p.ARM_PARAM_IDS["overtemp_c"], 0x60)
+        self.assertEqual(p.ARM_PARAM_IDS["stall_time_ms"], 0x64)
+        for param_id in p.ARM_PARAM_IDS.values():
+            self.assertIn(param_id, p.PARAM_NAMES)
+            self.assertNotIn(param_id, p.CALIB_PARAM_IDS)
+
+
 class CrashAssemblerTests(unittest.TestCase):
     @staticmethod
     def _chunk(slot, offset, total, data, more=None):
@@ -336,6 +385,84 @@ class CrashAssemblerTests(unittest.TestCase):
         assembler.reset()
         self.assertEqual(assembler.offset, 0)
         self.assertIsNone(assembler.slot)
+
+
+class ParamReportTests(unittest.TestCase):
+    @staticmethod
+    def _payload(chunk, last, records):
+        body = struct.pack("<BBB", chunk, 1 if last else 0, len(records))
+        for kind, param_id, value in records:
+            body += struct.pack("<BBi", kind, param_id, value)
+        return body
+
+    def test_decode_records_in_order(self):
+        payload = self._payload(0, False, [
+            (p.PARAM_KIND_PARAM, 0x20, 5000),
+            (p.PARAM_KIND_CALIB, 0x01, 240),
+            (p.PARAM_KIND_SERVO_OFFSET, 3, -1250),
+        ])
+        data = p.decode_param(payload)
+        self.assertIsNotNone(data)
+        self.assertEqual(data["chunk"], 0)
+        self.assertFalse(data["last"])
+        self.assertEqual([r["id"] for r in data["records"]],
+                         [0x20, 0x01, 3])
+        self.assertEqual(data["records"][2]["value"], -1250)
+
+    def test_header_only_last_chunk(self):
+        data = p.decode_param(self._payload(2, True, []))
+        self.assertEqual(data["records"], [])
+        self.assertTrue(data["last"])
+
+    def test_bad_lengths_and_counts_are_rejected(self):
+        self.assertIsNone(p.decode_param(b"\x00\x00"))
+        self.assertIsNone(p.decode_param(b"\x00\x00\x01"))
+        # count says 2 but the body carries only one record
+        self.assertIsNone(p.decode_param(bytes((0, 0, 2)) + b"\x00" * 6))
+        # more records than a frame can carry
+        self.assertIsNone(p.decode_param(
+            bytes((0, 0, p.PARAM_CHUNK_RECORD_MAX + 1)) +
+            b"\x00" * (p.PARAM_CHUNK_RECORD_MAX + 1) * 6))
+
+    def test_chunk_header_fits_payload(self):
+        self.assertEqual(p.PARAM_CHUNK_RECORD_MAX, 10)
+        self.assertLessEqual(p.PARAM_CHUNK_HEADER +
+                             p.PARAM_CHUNK_RECORD_MAX * p.PARAM_RECORD_BYTES,
+                             p.PAYLOAD_MAX)
+
+    def test_assembler_in_order_completes(self):
+        assembler = p.ParamAssembler()
+        first = p.decode_param(self._payload(0, False, [(0, 0x10, 200)]))
+        last = p.decode_param(self._payload(1, True, [(1, 0x50, 24828)]))
+        self.assertEqual(assembler.feed(first), "start")
+        self.assertEqual(assembler.feed(last), "done")
+        self.assertEqual(len(assembler.records), 2)
+        self.assertEqual(assembler.records[1]["value"], 24828)
+
+    def test_assembler_gap_drops_partial_set(self):
+        assembler = p.ParamAssembler()
+        assembler.feed(p.decode_param(self._payload(0, False, [(0, 1, 1)])))
+        # chunk 2 arrived without chunk 1
+        outcome = assembler.feed(
+            p.decode_param(self._payload(2, True, [(0, 2, 2)])))
+        self.assertEqual(outcome, "gap")
+        self.assertEqual(assembler.records, [])
+
+    def test_assembler_restarts_on_chunk_zero(self):
+        assembler = p.ParamAssembler()
+        assembler.feed(p.decode_param(
+            self._payload(0, False, [(0, 0x10, 200), (0, 0x11, 500)])))
+        outcome = assembler.feed(p.decode_param(
+            self._payload(0, True, [(0, 0x10, 250)])))
+        self.assertEqual(outcome, "done")
+        self.assertEqual(len(assembler.records), 1)
+        self.assertEqual(assembler.records[0]["value"], 250)
+
+    def test_command_ids_are_inside_their_ranges(self):
+        self.assertEqual(p.Cmd.GET_PARAM, 0x0F)
+        self.assertEqual(p.Report.PARAM, 0xCC)
+        self.assertLessEqual(p.Cmd.GET_PARAM, 0x3F)
+        self.assertGreaterEqual(p.Report.PARAM, 0xC0)
 
 
 if __name__ == "__main__":

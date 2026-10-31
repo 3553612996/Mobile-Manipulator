@@ -40,6 +40,8 @@ class Cmd(IntEnum):
     LOG_EXPORT = 0x0B
     CRASH_READ = 0x0C
     LOG_CLEAR = 0x0D
+    SERVO_CONFIG = 0x0E
+    GET_PARAM = 0x0F
 
 
 class Report(IntEnum):
@@ -55,6 +57,8 @@ class Report(IntEnum):
     STORAGE = 0xC8
     LOG = 0xC9
     CRASH = 0xCA
+    ARM_STATUS = 0xCB
+    PARAM = 0xCC
 
 
 class Result(IntEnum):
@@ -96,8 +100,10 @@ FAULT_NAMES = {
     0x0301: "关节超限位",
     0x0302: "关节堵转",
     0x0303: "轨迹执行异常",
+    0x0304: "关节舵机离线",
     0x0401: "电池低压",
-    0x0402: "温度过高",
+    0x0402: "舵机过温",
+    0x0403: "机械臂供电异常",
     0x0501: "急停触发",
     0x0601: "参数区无效",
     0x0602: "标定区无效",
@@ -137,6 +143,54 @@ for _wheel, _ids in enumerate(PID_PARAM_IDS):
 TEST_DUTY_IDS = (0x30, 0x31, 0x32, 0x33)
 for _wheel, _id in enumerate(TEST_DUTY_IDS):
     PARAM_NAMES[_id] = f"{WHEEL_NAMES[_wheel]} 测试占空比"
+
+# Arm bus-servo protection thresholds (SET_PARAM 0x60..0x64), plain integers
+# in the parameter region: over-temperature °C, under/over-voltage mV, stall
+# error 0.01°, stall window ms.
+ARM_PARAM_IDS = {
+    "overtemp_c": 0x60,
+    "undervolt_mv": 0x61,
+    "overvolt_mv": 0x62,
+    "stall_error_cdeg": 0x63,
+    "stall_time_ms": 0x64,
+}
+PARAM_NAMES.update({
+    0x60: "舵机过温阈值",
+    0x61: "舵机欠压阈值",
+    0x62: "舵机过压阈值",
+    0x63: "堵转判定误差",
+    0x64: "堵转判定时间",
+})
+
+# Servo configuration operations of 0x0E SERVO_CONFIG (protocol.md 5.6.1).
+SERVO_JOINT_COUNT = 6
+SERVO_JOINT_NAMES = tuple(f"关节 {i + 1}" for i in range(SERVO_JOINT_COUNT))
+SERVO_OP_SET_ID = 0x01
+SERVO_OP_SET_BIAS = 0x02
+SERVO_OP_CALIBRATE = 0x03
+SERVO_OP_CLEAR_CALIB = 0x04
+SERVO_OP_TORQUE = 0x05
+SERVO_OP_NAMES = {
+    SERVO_OP_SET_ID: "改舵机 ID",
+    SERVO_OP_SET_BIAS: "舵机偏置",
+    SERVO_OP_CALIBRATE: "标定零点",
+    SERVO_OP_CLEAR_CALIB: "清除标定",
+    SERVO_OP_TORQUE: "力矩开关",
+}
+
+# 0xCB per-joint fault bits and the frame-level flags.
+SERVO_FAULT_NAMES = (
+    (0x01, "离线"),
+    (0x02, "过温"),
+    (0x04, "欠压"),
+    (0x08, "过压"),
+    (0x10, "堵转"),
+    (0x20, "回包错"),
+)
+ARM_FLAG_ENABLED = 0x01
+ARM_FLAG_FAULTED = 0x02
+ARM_FLAG_OFFLINE = 0x04
+SERVO_TEMP_INVALID = -128
 
 # Calibration ids: these live in the calibration region, everything else in
 # the parameter region. Restoring defaults must not touch these.
@@ -178,6 +232,28 @@ CRASH_CHUNK_MAX = 57
 
 GRIPPER_ACTION_NAMES = {0: "张开", 1: "闭合"}
 GRIPPER_STATE_NAMES = {0: "张开", 1: "夹持", 2: "夹空"}
+
+# 0xCC REPORT_PARAM: GET_PARAM answer as chunks of {kind, id, value}.
+# The firmware reads RAM, so a value written but not saved still shows up;
+# REPORT_STORAGE bit0 says whether it reached flash.
+PARAM_KIND_PARAM = 0
+PARAM_KIND_CALIB = 1
+PARAM_KIND_SERVO_ID = 2
+PARAM_KIND_SERVO_OFFSET = 3
+PARAM_KIND_INFO = 4
+PARAM_KIND_NAMES = {
+    PARAM_KIND_PARAM: "参数区",
+    PARAM_KIND_CALIB: "标定区",
+    PARAM_KIND_SERVO_ID: "舵机 ID",
+    PARAM_KIND_SERVO_OFFSET: "舵机零点",
+    PARAM_KIND_INFO: "只读",
+}
+PARAM_INFO_WHEELBASE_MM = 0x01
+PARAM_INFO_STALL_MARGIN_MS = 0x02
+PARAM_CHUNK_HEADER = 3
+PARAM_RECORD_BYTES = 6
+PARAM_CHUNK_RECORD_MAX = (PAYLOAD_MAX - PARAM_CHUNK_HEADER) // PARAM_RECORD_BYTES
+PARAM_FLAG_LAST = 0x01
 
 
 # ------------------------------------------------------------------- codec
@@ -377,6 +453,19 @@ def log_clear_payload(source: int = 0) -> bytes:
     return struct.pack("<BB", int(source) & 0xFF, 0xA5)
 
 
+def servo_config_payload(joint: int, op: int, value: int = 0) -> bytes:
+    """0x0E: one joint, one operation, one signed value (protocol.md 5.6.1)."""
+    if not 0 <= int(joint) < SERVO_JOINT_COUNT:
+        raise ValueError(f"joint {joint} outside 0..{SERVO_JOINT_COUNT - 1}")
+    return struct.pack("<BBi", int(joint) & 0xFF, int(op) & 0xFF,
+                       max(-2**31, min(2**31 - 1, int(value))))
+
+
+def servo_fault_text(bits: int) -> str:
+    names = [name for bit, name in SERVO_FAULT_NAMES if bits & bit]
+    return " ".join(names) if names else "—"
+
+
 # ---------------------------------------------------------- payloads (up)
 
 def decode_odom(payload: bytes):
@@ -431,6 +520,30 @@ def decode_wheel_duty(payload: bytes):
     fl, fr, rl, rr = struct.unpack("<4h", payload)
     return {"fl_permille": fl, "fr_permille": fr,
             "rl_permille": rl, "rr_permille": rr}
+
+
+def decode_arm_status(payload: bytes):
+    """0xCB: flags, rail mV, then six {angle, temp, fault} entries."""
+    if len(payload) != 27:
+        return None
+    flags, rail_mv = struct.unpack_from("<BH", payload, 0)
+    joints = []
+    for index in range(SERVO_JOINT_COUNT):
+        angle, temp, faults = struct.unpack_from("<hbB", payload, 3 + 4 * index)
+        joints.append({
+            "angle_cdeg": angle,
+            "temperature_c": temp,
+            "temp_valid": temp != SERVO_TEMP_INVALID,
+            "fault_bits": faults,
+            "faults": servo_fault_text(faults),
+        })
+    return {
+        "enabled": bool(flags & ARM_FLAG_ENABLED),
+        "faulted": bool(flags & ARM_FLAG_FAULTED),
+        "offline": bool(flags & ARM_FLAG_OFFLINE),
+        "rail_mv": rail_mv,
+        "joints": joints,
+    }
 
 
 def decode_storage(payload: bytes):
@@ -496,6 +609,56 @@ def decode_crash(payload: bytes):
         "slot": slot, "more": bool(flags & 0x01), "offset": offset,
         "total_len": total_len, "data": data,
     }
+
+
+def decode_param(payload: bytes):
+    """0xCC: {chunk, flags, count} + count x {kind, id, int32 value}."""
+    if len(payload) < PARAM_CHUNK_HEADER:
+        return None
+    chunk, flags, count = payload[0], payload[1], payload[2]
+    if count > PARAM_CHUNK_RECORD_MAX:
+        return None
+    if len(payload) != PARAM_CHUNK_HEADER + count * PARAM_RECORD_BYTES:
+        return None
+    records = []
+    for index in range(count):
+        kind, param_id, value = struct.unpack_from(
+            "<BBi", payload, PARAM_CHUNK_HEADER + index * PARAM_RECORD_BYTES)
+        records.append({"kind": kind, "id": param_id, "value": value})
+    return {"chunk": chunk, "last": bool(flags & PARAM_FLAG_LAST),
+            "records": records}
+
+
+class ParamAssembler:
+    """Reassemble the 0xCC chunks of one GET_PARAM dump.
+
+    The firmware sends chunk 0..N in order and sets the last flag. A second
+    GET_PARAM restarts at 0; any other out-of-order chunk means the stream was
+    cut, so the partial set is dropped rather than shown with holes.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.records: list[dict] = []
+        self.chunks = 0
+        self.next_index = 0
+
+    def feed(self, chunk: dict) -> str:
+        """Returns "start", "chunk", "done" or "gap"."""
+        index = int(chunk["chunk"])
+        if index == 0:
+            self.reset()
+        elif index != self.next_index:
+            self.reset()
+            return "gap"
+        self.records.extend(chunk["records"])
+        self.next_index = index + 1
+        self.chunks += 1
+        if chunk["last"]:
+            return "done"
+        return "start" if index == 0 else "chunk"
 
 
 class CrashAssembler:
@@ -609,6 +772,14 @@ def describe(frame: Frame) -> str:
         arm = decode_arm(frame.payload) or {}
         return (f"{name} joints={arm.get('angles_cdeg')} "
                 f"grip={arm.get('gripper_pos')} state={arm.get('gripper_state')}")
+    if frame.cmd == Report.ARM_STATUS:
+        status = decode_arm_status(frame.payload) or {}
+        joints = status.get("joints", [])
+        temps = [f"{j['temperature_c']}C" if j["temp_valid"] else "--"
+                 for j in joints]
+        return (f"{name} rail={status.get('rail_mv')}mV "
+                f"enabled={status.get('enabled')} fault={status.get('faulted')} "
+                f"T={temps}")
     if frame.cmd == Report.WHEEL_SPEED:
         wheel = decode_wheel_speed(frame.payload) or {}
         return (f"{name} A={wheel.get('fl_mm_s')} B={wheel.get('fr_mm_s')} "
@@ -637,6 +808,11 @@ def describe(frame: Frame) -> str:
                 f"{chunk.get('offset')}/{chunk.get('total_len')} "
                 f"{len(chunk.get('data', b''))}B"
                 f"{' ...' if chunk.get('more') else ' 完'}")
+    if frame.cmd == Report.PARAM:
+        chunk = decode_param(frame.payload) or {}
+        return (f"{name} chunk={chunk.get('chunk')} "
+                f"{len(chunk.get('records', []))} 项"
+                f"{' 完' if chunk.get('last') else ' ...'}")
 
     return f"{name} seq={frame.seq} len={len(frame.payload)}"
 
@@ -650,3 +826,4 @@ VECTOR_ESTOP = bytes.fromhex("AA 55 02 06 03 39 38")
 VECTOR_PARAM_SAVE = bytes.fromhex("AA 55 03 08 04 00 79 7A")
 VECTOR_STORAGE_QUERY = bytes.fromhex("AA 55 02 0A 05 92 1D")
 VECTOR_LOG_EXPORT = bytes.fromhex("AA 55 08 0B 06 00 01 00 00 00 00 56 EC")
+VECTOR_SERVO_CONFIG = bytes.fromhex("AA 55 08 0E 07 02 01 07 00 00 00 E4 C6")
