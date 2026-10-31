@@ -411,6 +411,41 @@ platform_err_t service_proto_send_arm(
                                     PROTOCOL_LEN_REPORT_ARM);
 }
 
+platform_err_t service_proto_send_arm_status(
+                    uint8_t flags,
+                    uint16_t rail_mv,
+                    const int16_t joint_centi_deg
+                        [PROTOCOL_ARM_JOINT_COUNT],
+                    const int8_t temperature_c[PROTOCOL_ARM_JOINT_COUNT],
+                    const uint8_t fault_bits[PROTOCOL_ARM_JOINT_COUNT])
+{
+    uint8_t payload[PROTOCOL_LEN_REPORT_ARM_STATUS];
+    uint32_t offset = PROTOCOL_ARM_STATUS_HEADER;
+    uint8_t i;
+
+    if ((joint_centi_deg == NULL) || (temperature_c == NULL) ||
+        (fault_bits == NULL))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    payload[0] = flags;
+    protocol_put_u16(&payload[1], rail_mv);
+
+    for (i = 0u; i < PROTOCOL_ARM_JOINT_COUNT; i++)
+    {
+        protocol_put_i16(&payload[offset], joint_centi_deg[i]);
+        offset += 2u;
+        payload[offset] = (uint8_t)temperature_c[i];
+        offset++;
+        payload[offset] = fault_bits[i];
+        offset++;
+    }
+
+    return service_proto_send_frame(PROTOCOL_REPORT_ARM_STATUS, payload,
+                                    PROTOCOL_LEN_REPORT_ARM_STATUS);
+}
+
 platform_err_t service_proto_send_wheel_speed(
                     const int16_t wheel_mm_s[PROTOCOL_WHEEL_COUNT])
 {
@@ -595,6 +630,44 @@ platform_err_t service_proto_send_crash(uint8_t slot,
     return service_proto_send_frame(
                PROTOCOL_REPORT_CRASH, payload,
                (uint8_t)(PROTOCOL_LEN_REPORT_CRASH_HEADER + data_len));
+}
+
+platform_err_t service_proto_send_param(
+                    uint8_t chunk,
+                    uint8_t flags,
+                    const protocol_param_record_t *records,
+                    uint8_t count)
+{
+    uint8_t payload[PROTOCOL_LEN_REPORT_PARAM_HEADER +
+                    (PROTOCOL_PARAM_RECORD_BYTES * PROTOCOL_PARAM_RECORD_MAX)];
+    uint32_t offset = PROTOCOL_LEN_REPORT_PARAM_HEADER;
+    uint8_t i;
+
+    if (count > PROTOCOL_PARAM_RECORD_MAX)
+    {
+        count = PROTOCOL_PARAM_RECORD_MAX;
+    }
+    if ((records == NULL) && (count > 0u))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    payload[0] = chunk;
+    payload[1] = flags;
+    payload[2] = count;
+
+    for (i = 0u; i < count; i++)
+    {
+        payload[offset] = records[i].kind;
+        offset++;
+        payload[offset] = records[i].id;
+        offset++;
+        protocol_put_i32(&payload[offset], records[i].value);
+        offset += 4u;
+    }
+
+    return service_proto_send_frame(PROTOCOL_REPORT_PARAM, payload,
+                                    (uint8_t)offset);
 }
 
 uint32_t service_proto_rx_age_ms(uint32_t now_ms)

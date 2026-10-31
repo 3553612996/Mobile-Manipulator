@@ -47,6 +47,7 @@
 static platform_os_task_t s_comm_task;
 static platform_os_task_t s_control_task;
 static platform_os_task_t s_storage_task;
+static platform_os_task_t s_servo_task;
 static platform_os_queue_t s_pid_queue;
 static platform_os_queue_t s_storage_queue;
 static platform_os_queue_t s_export_queue;
@@ -90,6 +91,18 @@ static const app_task_def_t s_task_table[] =
         APP_STORAGE_TASK_STACK_BYTES,
         PLATFORM_OS_PRIORITY_LOW,
         &s_storage_task
+    },
+    {
+        /*
+         * The bus state machine must run often (it sends one slot per period
+         * and enforces the 100 ms gap), but never ahead of control: a late
+         * query only delays the next angle reading, never the motors.
+         */
+        "appServo",
+        app_tasks_servo_entry,
+        APP_SERVO_TASK_STACK_BYTES,
+        PLATFORM_OS_PRIORITY_LOW,
+        &s_servo_task
     }
 };
 
@@ -143,7 +156,7 @@ platform_os_queue_t app_user_init_pid_queue(void)
  */
 static platform_bool_t app_user_init_storage(void)
 {
-    /* Sized for the larger blob: the calibration area is 80 B. */
+    /* Sized for the larger blob: the calibration area is 128 B. */
     uint8_t buffer[APP_PARAMS_BLOB_MAX_SIZE];
     uint16_t length = 0u;
     uint32_t seq = 0u;
@@ -239,6 +252,8 @@ static platform_err_t app_user_init_chassis(void)
 static platform_err_t app_user_init_arm(void)
 {
     service_arm_cfg_t arm_cfg;
+    platform_servo_joint_cfg_t joint_map[PLATFORM_SERVO_JOINT_COUNT];
+    platform_err_t err;
     uint8_t i;
 
     for (i = 0u; i < SERVICE_ARM_JOINT_COUNT; i++)
@@ -246,11 +261,55 @@ static platform_err_t app_user_init_arm(void)
         arm_cfg.min_centi_deg[i] = APP_ARM_MIN_CENTI_DEG;
         arm_cfg.max_centi_deg[i] = APP_ARM_MAX_CENTI_DEG;
         arm_cfg.home_centi_deg[i] = 0;
+
+        /*
+         * The bus address and the calibrated zero are per-unit data: a
+         * replaced servo was re-addressed and the mechanical zero measured
+         * on the bench. Both come from the saved calibration blob.
+         */
+        joint_map[i].joint = i;
+        joint_map[i].servo_id = app_params_servo_id(i);
+        joint_map[i].offset_centi_deg = app_params_servo_offset_centi_deg(i);
     }
 
     arm_cfg.default_move_time_ms = APP_ARM_MOVE_TIME_MS;
 
-    return service_arm_init(&arm_cfg);
+    arm_cfg.protection.overtemp_c = app_params_arm_overtemp_c();
+    arm_cfg.protection.undervolt_mv =
+        (uint16_t)app_params_arm_undervolt_mv();
+    arm_cfg.protection.overvolt_mv = (uint16_t)app_params_arm_overvolt_mv();
+    arm_cfg.protection.stall_error_centi_deg =
+        app_params_arm_stall_error_centi_deg();
+    arm_cfg.protection.stall_time_ms =
+        (uint16_t)app_params_arm_stall_time_ms();
+    arm_cfg.protection.stall_margin_ms =
+        (uint16_t)app_params_arm_stall_margin_ms();
+
+    /* Map before init, as the platform contract requires. */
+    err = platform_servo_set_joint_map(joint_map);
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    err = platform_servo_init();
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    err = service_arm_init(&arm_cfg);
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    /*
+     * Hold the pose from boot: a powered arm that boots with torque released
+     * drops under gravity before the host has sent anything. The restore
+     * frame leaves on the first poll of the servo task.
+     */
+    return service_arm_enable(PLATFORM_TRUE);
 }
 
 static platform_err_t app_user_init_key(void)
@@ -280,6 +339,25 @@ platform_err_t app_user_init_init(void)
     uart_cfg.stop_bits = PLATFORM_UART_STOP_BITS_1;
     uart_cfg.duplex = PLATFORM_UART_DUPLEX_FULL;
     uart_cfg.use_dma = PLATFORM_TRUE;
+
+    err = platform_uart_init(&uart_cfg);
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    /*
+     * UART5, single wire to the servo daisy chain. Half duplex, no DMA: the
+     * vendor protocol is request/response with 100 ms gaps, so the RX ring
+     * filled by the RXNE interrupt is enough.
+     */
+    uart_cfg.bus = APP_SERVO_UART_BUS;
+    uart_cfg.baudrate = APP_SERVO_UART_BAUDRATE;
+    uart_cfg.data_bits = 8u;
+    uart_cfg.parity = PLATFORM_UART_PARITY_NONE;
+    uart_cfg.stop_bits = PLATFORM_UART_STOP_BITS_1;
+    uart_cfg.duplex = PLATFORM_UART_DUPLEX_HALF;
+    uart_cfg.use_dma = PLATFORM_FALSE;
 
     err = platform_uart_init(&uart_cfg);
     if (PLATFORM_IS_ERR(err))

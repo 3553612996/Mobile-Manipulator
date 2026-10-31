@@ -1018,6 +1018,11 @@
               <FileType>1</FileType>
               <FilePath>../06_BSP/bsp_servo_softpwm.c</FilePath>
             </File>
+            <File>
+              <FileName>bsp_servo_bus.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../06_BSP/bsp_servo_bus.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

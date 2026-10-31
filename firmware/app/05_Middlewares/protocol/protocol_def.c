@@ -61,7 +61,11 @@ static const protocol_cmd_info_t s_cmd_table[] =
     { PROTOCOL_CMD_CRASH_READ,     PROTOCOL_LEN_CRASH_READ,
       PLATFORM_TRUE,  "CRASH_READ" },
     { PROTOCOL_CMD_LOG_CLEAR,      PROTOCOL_LEN_LOG_CLEAR,
-      PLATFORM_TRUE,  "LOG_CLEAR" }
+      PLATFORM_TRUE,  "LOG_CLEAR" },
+    { PROTOCOL_CMD_SERVO_CONFIG,   PROTOCOL_LEN_SERVO_CONFIG,
+      PLATFORM_TRUE,  "SERVO_CONFIG" },
+    { PROTOCOL_CMD_GET_PARAM,      PROTOCOL_LEN_GET_PARAM,
+      PLATFORM_TRUE,  "GET_PARAM" }
 };
 
 #define PROTOCOL_CMD_TABLE_SIZE \
@@ -108,7 +112,6 @@ protocol_severity_t protocol_fault_severity(uint16_t code)
     {
         case PROTOCOL_FAULT_CRC_LIMIT:
         case PROTOCOL_FAULT_BATTERY_LOW:
-        case PROTOCOL_FAULT_OVERTEMP:
         case PROTOCOL_FAULT_PARAM_INVALID:
         case PROTOCOL_FAULT_CALIB_INVALID:
             return PROTOCOL_SEVERITY_WARN;
@@ -118,6 +121,9 @@ protocol_severity_t protocol_fault_severity(uint16_t code)
         case PROTOCOL_FAULT_JOINT_LIMIT:
         case PROTOCOL_FAULT_JOINT_STALL:
         case PROTOCOL_FAULT_TRAJECTORY:
+        case PROTOCOL_FAULT_ARM_OFFLINE:
+        case PROTOCOL_FAULT_OVERTEMP:
+        case PROTOCOL_FAULT_ARM_VOLTAGE:
         case PROTOCOL_FAULT_STORAGE_WRITE:
         case PROTOCOL_FAULT_PARTITION:
             return PROTOCOL_SEVERITY_ERROR;

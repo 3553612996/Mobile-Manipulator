@@ -23,7 +23,7 @@
  *   wheel B = TIM8 CH3/CH4 (PC8/PC9), encoder TIM4
  *   wheel C = TIM1 CH2N/CH3N (PB0/PB1), encoder TIM3
  *   wheel D = TIM1 CH1/CH4 (PA8/PA11), encoder TIM2
- *   servos  = PC13, PC14, PC15, PC0, PC1, PC2 on the TIM7 soft-PWM chain
+ *   servos  = UART5 (PC12) half duplex, 115200, daisy-chained bus servos
  *   key PB2, LED PC4 (active low), buzzer PC5 (active high)
  *   battery divider x11 on ADC1_IN13 / PC3
  *   W25Q64 on SPI2: SCK PB13, MISO PB14, MOSI PB15, CS PB12 (GPIO)
@@ -54,7 +54,7 @@
 #include "impl_bsp/impl_bsp_flash.h"
 
 #include "bsp_motor_dual_pwm.h"
-#include "bsp_servo_softpwm.h"
+#include "bsp_servo_bus.h"
 #include "bsp_key_gpio.h"
 #include "bsp_led_gpio.h"
 #include "bsp_buzzer_gpio.h"
@@ -72,6 +72,9 @@
 #define BOARD_ADC_CHANNEL       PLATFORM_ADC_CHANNEL_0
 #define BOARD_ADC_DIVIDER       ((uint16_t)11u)
 
+/* UART5, the daisy-chained bus servo line (see impl_mcu_uart.c). */
+#define BOARD_SERVO_BUS         PLATFORM_UART_BUS_1
+
 //******************************** Declaring ********************************//
 
 typedef struct
@@ -86,7 +89,7 @@ typedef struct
 //******************************** Variables ********************************//
 
 static bsp_motor_dual_pwm_t s_motor[BOARD_MOTOR_COUNT];
-static bsp_servo_softpwm_t  s_servo;
+static bsp_servo_bus_t      s_servo;
 static bsp_key_gpio_t       s_key;
 static bsp_led_gpio_t       s_led;
 static bsp_buzzer_gpio_t    s_buzzer;
@@ -127,16 +130,6 @@ static const board_motor_wiring_t s_motor_wiring[BOARD_MOTOR_COUNT] =
               PLATFORM_ENCODER_CHANNEL_0, PLATFORM_TRUE,  PLATFORM_TRUE },
 };
 
-static const platform_gpio_t s_servo_pin[BSP_SERVO_JOINT_COUNT] =
-{
-    { BOARD_GPIO_PORT_C, 13u },
-    { BOARD_GPIO_PORT_C, 14u },
-    { BOARD_GPIO_PORT_C, 15u },
-    { BOARD_GPIO_PORT_C, 0u },
-    { BOARD_GPIO_PORT_C, 1u },
-    { BOARD_GPIO_PORT_C, 2u },
-};
-
 //******************************** Functions ********************************//
 
 static platform_err_t board_register_motors(void)
@@ -165,19 +158,30 @@ static platform_err_t board_register_motors(void)
     return PLATFORM_ERR_OK;
 }
 
+/*
+ * Factory bus map: joint n talks to servo n, zero offset. The application
+ * replaces both tables from the persisted parameters before the bus starts,
+ * so a reassigned ID or a calibrated zero survives a power cycle.
+ */
 static platform_err_t board_register_servo(void)
 {
     uint8_t i;
 
-    for (i = 0u; i < BSP_SERVO_JOINT_COUNT; i++)
+    s_servo.cfg.bus         = BOARD_SERVO_BUS;
+    s_servo.cfg.joint_count = BSP_SERVO_BUS_JOINT_MAX;
+
+    for (i = 0u; i < BSP_SERVO_BUS_JOINT_MAX; i++)
     {
-        s_servo.cfg.pin[i] = s_servo_pin[i];
+        s_servo.cfg.servo_id[i] = i;
+        s_servo.cfg.offset_centi_deg[i] = 0;
     }
 
-    s_servo.cfg.timer                  = PLATFORM_TIMER_ID_0;
-    s_servo.cfg.pulse_center_us        = BSP_SERVO_PULSE_CENTER_US;
-    s_servo.cfg.pulse_span_us          = BSP_SERVO_PULSE_SPAN_US;
-    s_servo.cfg.angle_limit_centi_deg  = BSP_SERVO_ANGLE_LIMIT;
+    s_servo.cfg.pulse_min_us           = BSP_SERVO_BUS_PULSE_MIN_US;
+    s_servo.cfg.pulse_max_us           = BSP_SERVO_BUS_PULSE_MAX_US;
+    s_servo.cfg.angle_limit_centi_deg  = BSP_SERVO_BUS_DEFAULT_LIMIT_CENTI_DEG;
+    s_servo.cfg.bus_gap_ms             = BSP_SERVO_BUS_DEFAULT_GAP_MS;
+    s_servo.cfg.reply_timeout_ms       = BSP_SERVO_BUS_DEFAULT_REPLY_MS;
+    s_servo.cfg.offline_misses         = BSP_SERVO_BUS_DEFAULT_OFFLINE_MISSES;
 
     return platform_servo_register(&impl_bsp_servo_ops, &s_servo);
 }
@@ -289,21 +293,10 @@ platform_err_t board_init(void)
     }
 
     /*
-     * The arm has no holding torque without a pulse train, and the vendor board
-     * starts the waveform on boot at the center pulse, so do the same.
+     * The servo bus is only registered here. It needs the UART and the persisted
+     * ID/zero map, which do not exist yet at board_init() time; app_user_init.c
+     * initializes and enables it once the parameters are loaded.
      */
-    err = platform_servo_init();
-    if (PLATFORM_IS_ERR(err))
-    {
-        return err;
-    }
-
-    err = platform_servo_set_enable(PLATFORM_TRUE);
-    if (PLATFORM_IS_ERR(err))
-    {
-        return err;
-    }
-
     err = platform_key_init(PLATFORM_KEY_ID_0);
     if (PLATFORM_IS_ERR(err))
     {

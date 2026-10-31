@@ -87,11 +87,18 @@ app_fault_scope_t app_fault_scope_get(uint16_t code)
         case PROTOCOL_FAULT_JOINT_LIMIT:
         case PROTOCOL_FAULT_JOINT_STALL:
         case PROTOCOL_FAULT_TRAJECTORY:
+        /*
+         * The only temperature this board can measure is the bus servo's;
+         * the rail voltage the servos report is the arm's supply. ARM_OFFLINE
+         * is an unresponsive servo on the daisy chain.
+         */
+        case PROTOCOL_FAULT_OVERTEMP:
+        case PROTOCOL_FAULT_ARM_OFFLINE:
+        case PROTOCOL_FAULT_ARM_VOLTAGE:
             return APP_FAULT_SCOPE_ARM;
 
         case PROTOCOL_FAULT_CRC_LIMIT:
         case PROTOCOL_FAULT_BATTERY_LOW:
-        case PROTOCOL_FAULT_OVERTEMP:
         /* Storage faults stop saving, not driving (protocol.md 8). */
         case PROTOCOL_FAULT_PARAM_INVALID:
         case PROTOCOL_FAULT_CALIB_INVALID:

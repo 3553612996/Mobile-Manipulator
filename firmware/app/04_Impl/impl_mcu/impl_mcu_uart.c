@@ -10,10 +10,18 @@
  *
  * @author wuying <3553612993@qq.com>
  *
- * @brief Adapt the platform UART contract to USART3 + DMA on STM32F103.
+ * @brief Adapt the platform UART contract to USART3 + DMA and UART5 half-duplex.
  *
- * RX path
+ * Mapping
  * -------
+ * - Logical bus 0: USART3 (PB10/PB11) to the host, full duplex, RX by circular
+ *   DMA with full/half/idle interrupts.
+ * - Logical bus 1: UART5 (PC12) to the bus servos, half duplex single wire,
+ *   open drain, RX by RXNE interrupt. This is the wiring of the vendor board:
+ *   the daisy-chain data line is pulled up and the MCU only drives it low.
+ *
+ * RX path (bus 0)
+ * ---------------
  * A circular DMA channel writes into a 256-byte buffer. The transfer-complete
  * (full), half-transfer and USART idle interrupts all call the same capture
  * routine: it computes the producer position from the DMA counter, copies the
@@ -21,23 +29,21 @@
  * callback (which must only wake a task). The ring buffer is single-producer
  * (ISR) / single-consumer (task), so no lock is needed.
  *
- * Why all three interrupts: full/half make the latency independent of the
- * frame rate, and IDLE flushes the tail of a burst (otherwise the last bytes
- * wait for the next half-transfer). The USART idle interrupt is enabled
- * manually because HAL_UART_Receive_DMA does not enable it.
+ * RX path (bus 1)
+ * ---------------
+ * UART5 has no DMA request on this part in the vendor wiring, so the RXNE
+ * interrupt pushes bytes straight into the ring. While transmitting, the
+ * half-duplex line echoes our own frame; RXNE is masked for the duration and
+ * the ring is cleared once TC is reached, because a servo can only answer
+ * after the last byte is on the wire.
  *
  * TX path
  * -------
  * Blocking HAL_UART_Transmit. Protocol frames are at most 71 bytes (6.2 ms at
- * 115200) and only one task transmits, so a DMA TX channel would add state
- * without buying anything yet.
+ * 115200) and bus frames at most 92 bytes, and only one task transmits per
+ * bus, so a DMA TX channel would add state without buying anything yet.
  *
- * Mapping
- * -------
- * The board wires USART3 to the host, so logical bus 0 maps to USART3. Other
- * logical buses return PLATFORM_ERR_NOT_SUPPORTED.
- *
- * @version V1.0 2026-10-28
+ * @version V2.0 2026-10-31
  *
  * @note 1 tab == 4 spaces.
  *
@@ -53,13 +59,17 @@
 
 //******************************** Defines **********************************//
 
-#define IMPL_UART_PORT_BUS          ((platform_uart_bus_t)0u)
+#define IMPL_UART_BUS_HOST          ((platform_uart_bus_t)0u)
+#define IMPL_UART_BUS_SERVO         ((platform_uart_bus_t)1u)
+#define IMPL_UART_BUS_COUNT         (2u)
+
 #define IMPL_UART_DMA_BUFFER_SIZE   (256u)
 #define IMPL_UART_RING_SIZE         (256u)
 #define IMPL_UART_DMA_MASK          (IMPL_UART_DMA_BUFFER_SIZE - 1u)
 
 /* Must stay numerically >= configMAX_SYSCALL_INTERRUPT_PRIORITY (5). */
 #define IMPL_UART_DMA_IRQ_PRIORITY  (6u)
+#define IMPL_UART5_IRQ_PRIORITY     (6u)
 
 #define IMPL_UART_TX_TIMEOUT_MS     (100u)
 
@@ -68,6 +78,7 @@
 typedef struct
 {
     platform_bool_t             initialized;
+    platform_bool_t             use_dma;
     uint8_t                     dma_buffer[IMPL_UART_DMA_BUFFER_SIZE];
     uint32_t                    dma_read;       /* ISR-owned read index. */
     platform_ringbuf_t          ring;
@@ -79,21 +90,35 @@ typedef struct
 
 //******************************** Variables ********************************//
 
-static impl_uart_ctx_t      s_uart;
+static impl_uart_ctx_t      s_uart[IMPL_UART_BUS_COUNT];
 static DMA_HandleTypeDef    s_hdma_usart3_rx;
+static UART_HandleTypeDef   s_huart5;
 
 //******************************** Functions ********************************//
 
 static platform_bool_t impl_uart_bus_ok(platform_uart_bus_t bus)
 {
-    return (bus == IMPL_UART_PORT_BUS) ? PLATFORM_TRUE : PLATFORM_FALSE;
+    return (bus < IMPL_UART_BUS_COUNT) ? PLATFORM_TRUE : PLATFORM_FALSE;
 }
 
-static void impl_uart_notify(platform_uart_event_t event)
+static void impl_uart_notify(platform_uart_bus_t bus,
+                             platform_uart_event_t event)
 {
-    if (s_uart.callback != NULL)
+    if (s_uart[bus].callback != NULL)
     {
-        s_uart.callback(IMPL_UART_PORT_BUS, event, s_uart.user_data);
+        s_uart[bus].callback(bus, event, s_uart[bus].user_data);
+    }
+}
+
+static void impl_uart_ring_push(platform_uart_bus_t bus, uint8_t byte)
+{
+    if (platform_ringbuf_write_byte(&s_uart[bus].ring, byte) != 1u)
+    {
+        s_uart[bus].dropped_bytes++;
+    }
+    else
+    {
+        impl_uart_notify(bus, PLATFORM_UART_EVENT_RX_DATA);
     }
 }
 
@@ -105,6 +130,7 @@ static void impl_uart_notify(platform_uart_event_t event)
  */
 static void impl_uart_capture(void)
 {
+    impl_uart_ctx_t *ctx = &s_uart[IMPL_UART_BUS_HOST];
     uint32_t write_pos;
     uint32_t moved = 0u;
 
@@ -112,15 +138,15 @@ static void impl_uart_capture(void)
                  __HAL_DMA_GET_COUNTER(&s_hdma_usart3_rx)) &
                 IMPL_UART_DMA_MASK;
 
-    while (s_uart.dma_read != write_pos)
+    while (ctx->dma_read != write_pos)
     {
-        uint8_t byte = s_uart.dma_buffer[s_uart.dma_read];
+        uint8_t byte = ctx->dma_buffer[ctx->dma_read];
 
-        s_uart.dma_read = (s_uart.dma_read + 1u) & IMPL_UART_DMA_MASK;
+        ctx->dma_read = (ctx->dma_read + 1u) & IMPL_UART_DMA_MASK;
 
-        if (platform_ringbuf_write_byte(&s_uart.ring, byte) != 1u)
+        if (platform_ringbuf_write_byte(&ctx->ring, byte) != 1u)
         {
-            s_uart.dropped_bytes++;
+            ctx->dropped_bytes++;
         }
         else
         {
@@ -130,7 +156,7 @@ static void impl_uart_capture(void)
 
     if (moved > 0u)
     {
-        impl_uart_notify(PLATFORM_UART_EVENT_RX_DATA);
+        impl_uart_notify(IMPL_UART_BUS_HOST, PLATFORM_UART_EVENT_RX_DATA);
     }
 }
 
@@ -139,7 +165,7 @@ static HAL_StatusTypeDef impl_uart_start_rx_dma(void)
     HAL_StatusTypeDef status;
 
     status = HAL_UART_Receive_DMA(&huart3,
-                                  s_uart.dma_buffer,
+                                  s_uart[IMPL_UART_BUS_HOST].dma_buffer,
                                   (uint16_t)IMPL_UART_DMA_BUFFER_SIZE);
     if (status != HAL_OK)
     {
@@ -152,13 +178,9 @@ static HAL_StatusTypeDef impl_uart_start_rx_dma(void)
     return HAL_OK;
 }
 
-static platform_err_t impl_uart_apply_cfg(const platform_uart_cfg_t *cfg)
+static platform_err_t impl_uart_apply_cfg_usart3(
+                                        const platform_uart_cfg_t *cfg)
 {
-    if ((cfg->data_bits != 8u) && (cfg->data_bits != 9u))
-    {
-        return PLATFORM_ERR_PARAM;
-    }
-
     if (cfg->duplex != PLATFORM_UART_DUPLEX_FULL)
     {
         return PLATFORM_ERR_NOT_SUPPORTED;
@@ -198,6 +220,75 @@ static platform_err_t impl_uart_apply_cfg(const platform_uart_cfg_t *cfg)
     return PLATFORM_ERR_OK;
 }
 
+/*
+ * UART5 is not in the CubeMX project, so its clock, pin and NVIC line are
+ * configured here. PC12 is the single bidirectional data line: alternate
+ * function open drain, exactly as the vendor's board drives it.
+ */
+static platform_err_t impl_uart_apply_cfg_uart5(
+                                        const platform_uart_cfg_t *cfg)
+{
+    GPIO_InitTypeDef gpio;
+
+    if (cfg->duplex != PLATFORM_UART_DUPLEX_HALF)
+    {
+        return PLATFORM_ERR_NOT_SUPPORTED;
+    }
+
+    if (cfg->parity != PLATFORM_UART_PARITY_NONE)
+    {
+        return PLATFORM_ERR_NOT_SUPPORTED;
+    }
+
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_UART5_CLK_ENABLE();
+
+    gpio.Pin = GPIO_PIN_12;
+    gpio.Mode = GPIO_MODE_AF_OD;
+    gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOC, &gpio);
+
+    s_huart5.Instance = UART5;
+    s_huart5.Init.BaudRate = cfg->baudrate;
+    s_huart5.Init.WordLength = (cfg->data_bits == 9u)
+                                   ? UART_WORDLENGTH_9B
+                                   : UART_WORDLENGTH_8B;
+    s_huart5.Init.StopBits = (cfg->stop_bits == PLATFORM_UART_STOP_BITS_2)
+                                 ? UART_STOPBITS_2
+                                 : UART_STOPBITS_1;
+    s_huart5.Init.Parity = UART_PARITY_NONE;
+    s_huart5.Init.Mode = UART_MODE_TX_RX;
+    s_huart5.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    s_huart5.Init.OverSampling = UART_OVERSAMPLING_16;
+
+    if (HAL_HalfDuplex_Init(&s_huart5) != HAL_OK)
+    {
+        return PLATFORM_ERR_FAIL;
+    }
+
+    HAL_NVIC_SetPriority(UART5_IRQn, IMPL_UART5_IRQ_PRIORITY, 0u);
+    HAL_NVIC_EnableIRQ(UART5_IRQn);
+
+    __HAL_UART_ENABLE_IT(&s_huart5, UART_IT_RXNE);
+
+    return PLATFORM_ERR_OK;
+}
+
+static platform_err_t impl_uart_apply_cfg(const platform_uart_cfg_t *cfg)
+{
+    if ((cfg->data_bits != 8u) && (cfg->data_bits != 9u))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    if (cfg->bus == IMPL_UART_BUS_HOST)
+    {
+        return impl_uart_apply_cfg_usart3(cfg);
+    }
+
+    return impl_uart_apply_cfg_uart5(cfg);
+}
+
 static platform_err_t impl_uart_setup_rx_dma(void)
 {
     __HAL_RCC_DMA1_CLK_ENABLE();
@@ -234,6 +325,7 @@ static platform_err_t impl_uart_setup_rx_dma(void)
 platform_err_t impl_uart_init(const platform_uart_cfg_t *cfg)
 {
     platform_err_t err;
+    impl_uart_ctx_t *ctx;
 
     if (cfg == NULL)
     {
@@ -245,23 +337,26 @@ platform_err_t impl_uart_init(const platform_uart_cfg_t *cfg)
         return PLATFORM_ERR_NOT_SUPPORTED;
     }
 
-    if (s_uart.initialized == PLATFORM_TRUE)
+    ctx = &s_uart[cfg->bus];
+
+    if (ctx->initialized == PLATFORM_TRUE)
     {
         return PLATFORM_ERR_ALREADY_INIT;
     }
 
-    err = platform_ringbuf_init(&s_uart.ring,
-                                s_uart.ring_storage,
+    err = platform_ringbuf_init(&ctx->ring,
+                                ctx->ring_storage,
                                 IMPL_UART_RING_SIZE);
     if (PLATFORM_IS_ERR(err))
     {
         return err;
     }
 
-    s_uart.dma_read = 0u;
-    s_uart.callback = NULL;
-    s_uart.user_data = NULL;
-    s_uart.dropped_bytes = 0u;
+    ctx->dma_read = 0u;
+    ctx->callback = NULL;
+    ctx->user_data = NULL;
+    ctx->dropped_bytes = 0u;
+    ctx->use_dma = cfg->use_dma;
 
     err = impl_uart_apply_cfg(cfg);
     if (PLATFORM_IS_ERR(err))
@@ -269,7 +364,7 @@ platform_err_t impl_uart_init(const platform_uart_cfg_t *cfg)
         return err;
     }
 
-    if (cfg->use_dma == PLATFORM_TRUE)
+    if ((cfg->use_dma == PLATFORM_TRUE) && (cfg->bus == IMPL_UART_BUS_HOST))
     {
         err = impl_uart_setup_rx_dma();
         if (PLATFORM_IS_ERR(err))
@@ -278,7 +373,30 @@ platform_err_t impl_uart_init(const platform_uart_cfg_t *cfg)
         }
     }
 
-    s_uart.initialized = PLATFORM_TRUE;
+    ctx->initialized = PLATFORM_TRUE;
+
+    return PLATFORM_ERR_OK;
+}
+
+static platform_err_t impl_uart_deinit_usart3(void)
+{
+    __HAL_UART_DISABLE_IT(&huart3, UART_IT_IDLE);
+    (void)HAL_UART_DMAStop(&huart3);
+    HAL_NVIC_DisableIRQ(DMA1_Channel3_IRQn);
+    (void)HAL_DMA_DeInit(&s_hdma_usart3_rx);
+
+    return PLATFORM_ERR_OK;
+}
+
+static platform_err_t impl_uart_deinit_uart5(void)
+{
+    __HAL_UART_DISABLE_IT(&s_huart5, UART_IT_RXNE);
+    HAL_NVIC_DisableIRQ(UART5_IRQn);
+    (void)HAL_UART_DeInit(&s_huart5);
+
+    /* HAL_UART_MspDeInit does not know UART5; release it here. */
+    __HAL_RCC_UART5_CLK_DISABLE();
+    HAL_GPIO_DeInit(GPIOC, GPIO_PIN_12);
 
     return PLATFORM_ERR_OK;
 }
@@ -290,19 +408,23 @@ platform_err_t impl_uart_deinit(platform_uart_bus_t bus)
         return PLATFORM_ERR_NOT_SUPPORTED;
     }
 
-    if (s_uart.initialized == PLATFORM_FALSE)
+    if (s_uart[bus].initialized == PLATFORM_FALSE)
     {
         return PLATFORM_ERR_NOT_INITIALIZED;
     }
 
-    __HAL_UART_DISABLE_IT(&huart3, UART_IT_IDLE);
-    (void)HAL_UART_DMAStop(&huart3);
-    HAL_NVIC_DisableIRQ(DMA1_Channel3_IRQn);
-    (void)HAL_DMA_DeInit(&s_hdma_usart3_rx);
+    if (bus == IMPL_UART_BUS_HOST)
+    {
+        (void)impl_uart_deinit_usart3();
+    }
+    else
+    {
+        (void)impl_uart_deinit_uart5();
+    }
 
-    s_uart.initialized = PLATFORM_FALSE;
-    s_uart.callback = NULL;
-    s_uart.user_data = NULL;
+    s_uart[bus].initialized = PLATFORM_FALSE;
+    s_uart[bus].callback = NULL;
+    s_uart[bus].user_data = NULL;
 
     return PLATFORM_ERR_OK;
 }
@@ -319,7 +441,7 @@ platform_err_t impl_uart_write(platform_uart_bus_t bus,
         return PLATFORM_ERR_NOT_SUPPORTED;
     }
 
-    if (s_uart.initialized == PLATFORM_FALSE)
+    if (s_uart[bus].initialized == PLATFORM_FALSE)
     {
         return PLATFORM_ERR_NOT_INITIALIZED;
     }
@@ -334,10 +456,32 @@ platform_err_t impl_uart_write(platform_uart_bus_t bus,
         return PLATFORM_ERR_PARAM;
     }
 
-    status = HAL_UART_Transmit(&huart3,
-                               (uint8_t *)data,
-                               (uint16_t)len,
-                               timeout_ms);
+    if (bus == IMPL_UART_BUS_SERVO)
+    {
+        /*
+         * Half duplex: mask the echo while our frame is on the wire, then
+         * throw it away. A reply cannot start before our last stop bit, and
+         * HAL_UART_Transmit already waited for TC before returning.
+         */
+        __HAL_UART_DISABLE_IT(&s_huart5, UART_IT_RXNE);
+
+        status = HAL_UART_Transmit(&s_huart5,
+                                   (uint8_t *)data,
+                                   (uint16_t)len,
+                                   timeout_ms);
+
+        platform_ringbuf_reset(&s_uart[bus].ring);
+        __HAL_UART_CLEAR_OREFLAG(&s_huart5);
+
+        __HAL_UART_ENABLE_IT(&s_huart5, UART_IT_RXNE);
+    }
+    else
+    {
+        status = HAL_UART_Transmit(&huart3,
+                                   (uint8_t *)data,
+                                   (uint16_t)len,
+                                   timeout_ms);
+    }
 
     if (status == HAL_OK)
     {
@@ -360,7 +504,7 @@ platform_err_t impl_uart_read(platform_uart_bus_t bus,
         return PLATFORM_ERR_NOT_SUPPORTED;
     }
 
-    if (s_uart.initialized == PLATFORM_FALSE)
+    if (s_uart[bus].initialized == PLATFORM_FALSE)
     {
         return PLATFORM_ERR_NOT_INITIALIZED;
     }
@@ -374,7 +518,7 @@ platform_err_t impl_uart_read(platform_uart_bus_t bus,
 
     while (got < len)
     {
-        uint32_t chunk = platform_ringbuf_read(&s_uart.ring,
+        uint32_t chunk = platform_ringbuf_read(&s_uart[bus].ring,
                                                &data[got],
                                                len - got);
         got += chunk;
@@ -415,7 +559,7 @@ platform_err_t impl_uart_read_async(platform_uart_bus_t bus,
     (void)data;
     (void)max_len;
 
-    /* Use platform_uart_rx_read(): RX is owned by the DMA ring buffer. */
+    /* Use platform_uart_rx_read(): RX is owned by the ring buffer. */
     return PLATFORM_ERR_NOT_SUPPORTED;
 }
 
@@ -444,7 +588,7 @@ platform_err_t impl_uart_rx_read(platform_uart_bus_t bus,
         return PLATFORM_ERR_NOT_SUPPORTED;
     }
 
-    if (s_uart.initialized == PLATFORM_FALSE)
+    if (s_uart[bus].initialized == PLATFORM_FALSE)
     {
         return PLATFORM_ERR_NOT_INITIALIZED;
     }
@@ -459,7 +603,7 @@ platform_err_t impl_uart_rx_read(platform_uart_bus_t bus,
         return PLATFORM_ERR_OK;
     }
 
-    copied = platform_ringbuf_read(&s_uart.ring, data, max_len);
+    copied = platform_ringbuf_read(&s_uart[bus].ring, data, max_len);
     *out_len = copied;
 
     return PLATFORM_ERR_OK;
@@ -480,12 +624,12 @@ platform_err_t impl_uart_rx_available(platform_uart_bus_t bus,
         return PLATFORM_ERR_NOT_SUPPORTED;
     }
 
-    if (s_uart.initialized == PLATFORM_FALSE)
+    if (s_uart[bus].initialized == PLATFORM_FALSE)
     {
         return PLATFORM_ERR_NOT_INITIALIZED;
     }
 
-    *count = platform_ringbuf_count(&s_uart.ring);
+    *count = platform_ringbuf_count(&s_uart[bus].ring);
 
     return PLATFORM_ERR_OK;
 }
@@ -500,8 +644,8 @@ platform_err_t impl_uart_register_event_cb(
         return PLATFORM_ERR_NOT_SUPPORTED;
     }
 
-    s_uart.callback = callback;
-    s_uart.user_data = user_data;
+    s_uart[bus].callback = callback;
+    s_uart[bus].user_data = user_data;
 
     return PLATFORM_ERR_OK;
 }
@@ -515,7 +659,7 @@ platform_err_t impl_uart_flush_rx(platform_uart_bus_t bus)
         return PLATFORM_ERR_NOT_SUPPORTED;
     }
 
-    if (s_uart.initialized == PLATFORM_FALSE)
+    if (s_uart[bus].initialized == PLATFORM_FALSE)
     {
         return PLATFORM_ERR_NOT_INITIALIZED;
     }
@@ -523,14 +667,21 @@ platform_err_t impl_uart_flush_rx(platform_uart_bus_t bus)
     primask = __get_PRIMASK();
     __disable_irq();
 
-    platform_ringbuf_reset(&s_uart.ring);
+    platform_ringbuf_reset(&s_uart[bus].ring);
 
-    /* Discard bytes the DMA has already written but not yet captured. */
-    s_uart.dma_read = (IMPL_UART_DMA_BUFFER_SIZE -
-                       __HAL_DMA_GET_COUNTER(&s_hdma_usart3_rx)) &
-                      IMPL_UART_DMA_MASK;
+    if (bus == IMPL_UART_BUS_HOST)
+    {
+        /* Discard bytes the DMA has already written but not yet captured. */
+        s_uart[bus].dma_read = (IMPL_UART_DMA_BUFFER_SIZE -
+                                __HAL_DMA_GET_COUNTER(&s_hdma_usart3_rx)) &
+                               IMPL_UART_DMA_MASK;
 
-    __HAL_UART_CLEAR_IDLEFLAG(&huart3);
+        __HAL_UART_CLEAR_IDLEFLAG(&huart3);
+    }
+    else
+    {
+        __HAL_UART_CLEAR_OREFLAG(&s_huart5);
+    }
 
     __set_PRIMASK(primask);
 
@@ -539,7 +690,7 @@ platform_err_t impl_uart_flush_rx(platform_uart_bus_t bus)
 
 void impl_uart_rx_poll_isr(void)
 {
-    if (s_uart.initialized == PLATFORM_FALSE)
+    if (s_uart[IMPL_UART_BUS_HOST].initialized == PLATFORM_FALSE)
     {
         return;
     }
@@ -550,7 +701,7 @@ void impl_uart_rx_poll_isr(void)
         __HAL_UART_CLEAR_IDLEFLAG(&huart3);
 
         impl_uart_capture();
-        impl_uart_notify(PLATFORM_UART_EVENT_RX_IDLE);
+        impl_uart_notify(IMPL_UART_BUS_HOST, PLATFORM_UART_EVENT_RX_IDLE);
     }
 }
 
@@ -576,7 +727,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART3)
     {
-        if (s_uart.initialized == PLATFORM_FALSE)
+        if (s_uart[IMPL_UART_BUS_HOST].initialized == PLATFORM_FALSE)
         {
             return;
         }
@@ -595,7 +746,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
         if (impl_uart_start_rx_dma() != HAL_OK)
         {
-            impl_uart_notify(PLATFORM_UART_EVENT_RX_ERROR);
+            impl_uart_notify(IMPL_UART_BUS_HOST, PLATFORM_UART_EVENT_RX_ERROR);
         }
     }
 }
@@ -609,4 +760,37 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 void DMA1_Channel3_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(&s_hdma_usart3_rx);
+}
+
+/*
+ * UART5 RXNE. Half duplex with the transmitter on the same pin, so an error
+ * is cleared by the SR-then-DR read and the byte is simply dropped.
+ */
+void UART5_IRQHandler(void)
+{
+    uint32_t status;
+    uint8_t byte;
+
+    if (s_uart[IMPL_UART_BUS_SERVO].initialized == PLATFORM_FALSE)
+    {
+        return;
+    }
+
+    status = s_huart5.Instance->SR;
+
+    if ((status & USART_SR_RXNE) != 0u)
+    {
+        byte = (uint8_t)(s_huart5.Instance->DR & 0xFFu);
+        impl_uart_ring_push(IMPL_UART_BUS_SERVO, byte);
+    }
+    else if ((status & (USART_SR_ORE | USART_SR_FE | USART_SR_NE |
+                        USART_SR_PE)) != 0u)
+    {
+        (void)s_huart5.Instance->DR;
+        impl_uart_notify(IMPL_UART_BUS_SERVO, PLATFORM_UART_EVENT_RX_ERROR);
+    }
+    else
+    {
+        /* Nothing we service; leave the interrupt source alone. */
+    }
 }

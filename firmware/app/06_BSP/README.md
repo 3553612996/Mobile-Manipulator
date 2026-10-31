@@ -24,7 +24,8 @@
 | 文件 | 器件 | 用到的平台接口 | 关键点 |
 | --- | --- | --- | --- |
 | `bsp_motor_dual_pwm.c` | 双 PWM H 桥 + 正交编码器 | `platform_mcu_pwm`、`platform_mcu_encoder` | 一侧满占空、一侧斩波；编码器 16 位，软件累加成 32 位 |
-| `bsp_servo_softpwm.c` | 六路模拟舵机 | `platform_mcu_gpio`、`platform_mcu_timer` | TIM7 单次定时器链，20 ms 帧 |
+| `bsp_servo_bus.c` | 六轴总线舵机（YH ASCII，UART5 半双工） | `platform_mcu_uart` | 100 ms 帧间隔、PRAD/PRTV 轮询、ID/偏置/零点配置、离线计数 |
+| `bsp_servo_softpwm.c` | 六路模拟舵机（备用驱动，当前未注册） | `platform_mcu_gpio`、`platform_mcu_timer` | TIM7 单次定时器链，20 ms 帧 |
 | `bsp_key_gpio.c` | 按键 | `platform_mcu_gpio` | 按时间计的去抖，`poll()` 由调用方给 `elapsed_ms` |
 | `bsp_led_gpio.c` | 状态灯 | `platform_mcu_gpio` | `active_low` 在驱动内转换 |
 | `bsp_buzzer_gpio.c` | 有源蜂鸣器 | `platform_mcu_gpio` | 只做开关，节奏留给应用 |
@@ -47,24 +48,35 @@ duty = 0 :  两路都 1000（同时导通 = 刹车，与原厂 MOTOR_x_SetSpeed 
 所以 16 位计数器回绕不会丢位置。`invert_direction` 同时翻转驱动方向和
 编码器计数，保证“正占空比 = 计数增加”。
 
-## 舵机：软件 PWM 的时序
+## 舵机：单线总线与轮询
 
-硬件没有舵机控制器，六路都是普通 GPIO，波形在定时器中断里生成：
+机械臂用的是带控制板的串行总线舵机，六颗串在一条线上，接线是
+**UART5 半双工单线**（PC12，经 R22 到舵机信号线），115200 8N1。协议是
+供应商的 YH ASCII v2.0：
 
 ```text
-20 ms 帧 = 6 × 2.5 ms 槽 + 5 ms 间隙
-每个槽：先高 pulse_us（500..2500），再低 (2500 - pulse_us)
+移动       #IDPpwmTtime!        pwm 0500..2500，time 0000..9999 ms
+多关节     {#000P1500T0800!#001P...!}
+读角度     #IDPRAD!      ->     #IDPpppp!
+读温度电压 #IDPRTV!      ->     #IDT25V07!   （回包格式随固件版本略有不同）
+改 ID      #IDPIDnew!    ->     #OK!
+偏置       #IDPSCK±xxx!         范围 ±100
+力矩       #IDPULK!（松）/ #IDPULR!（上力）
+停止       #255PDST!
 ```
 
-中断里每一步都重新编程下一次间隔，所以用的是**单次定时器**
-（`platform_mcu_timer`），不是固定周期的定时器。每帧 12 次中断
-（6 次上升 + 6 次下降），20 ms 内完成，CPU 占用可以忽略。
+供应商明确要求**两条命令至少间隔 100 ms**，所以驱动不是"调用即发送"，
+而是一个由 `appServo` 任务每 5 ms 推进一格的状态机：一个 slot 最多一帧，
+运动帧优先，但两次运动之间至少插一次查询，回读不会被连续目标饿死。
+角度按 6 颗一轮 `PRAD` 扫描（约 0.8~1 s 一圈），之后用一颗 `PRTV` 轮流补
+温度/电压（整圈约 5 s）。连续 3 次无应答判该关节离线。
 
-角度单位是 0.01°，0 对应中位脉冲 1500 µs，默认 ±90° 对应 1500±1000 µs。
-`move_time_ms` 按帧做整数定点插值（Q8），没有浮点，M3 上不需要 FPU。
+`bsp_servo_softpwm.c` 是上一版的模拟舵机驱动（六路 GPIO 软件 PWM，20 ms
+帧在 TIM7 单次定时器中断里生成），代码保留但**未注册**：当前板子接的是
+总线舵机。换回模拟舵机时在 `board_init.c` 改回注册它即可。
 
-中断只读写 `int32_t`/`uint16_t` 数组，Cortex-M3 上对齐访问是原子的；
-任务侧写入新目标可能晚一帧生效，但不会读到半个数据。
+保护逻辑不在本层：堵转、过温、过压的判定在 `service_arm`，驱动只负责
+如实回读角度、温度、电压和离线/回包错误位。
 
 ## 按键：为什么由调用方给时间
 

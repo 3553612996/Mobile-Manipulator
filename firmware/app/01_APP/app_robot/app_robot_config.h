@@ -41,6 +41,10 @@
 #define APP_ROBOT_UART_BUS              PLATFORM_UART_BUS_0
 #define APP_ROBOT_UART_BAUDRATE         ((uint32_t)115200u)
 
+/* UART5 single wire to the daisy-chained arm servos (vendor YH protocol). */
+#define APP_SERVO_UART_BUS              PLATFORM_UART_BUS_1
+#define APP_SERVO_UART_BAUDRATE         ((uint32_t)115200u)
+
 /* ------------------------------- Geometry ------------------------------- */
 
 #define APP_CHASSIS_HALF_LENGTH_MM      ((int16_t)150)
@@ -136,8 +140,10 @@
 #define APP_ODOM_PERIOD_MS              ((uint32_t)20u)    /* 50 Hz. */
 #define APP_WHEEL_SPEED_PERIOD_MS       ((uint32_t)20u)    /* 50 Hz. */
 #define APP_ARM_PERIOD_MS               ((uint32_t)50u)    /* 20 Hz. */
+#define APP_SERVO_PERIOD_MS             ((uint32_t)5u)     /* Bus slot poll. */
 #define APP_STATUS_PERIOD_MS            ((uint32_t)100u)   /* 10 Hz. */
 #define APP_HEARTBEAT_PERIOD_MS         ((uint32_t)100u)   /* 10 Hz. */
+#define APP_ARM_STATUS_PERIOD_MS        ((uint32_t)500u)   /* 0 xCB, 2 Hz. */
 
 /* 7.4 V (2S) pack: warn at 3.4 V/cell, well above the 3.0 V/cell floor. */
 #define APP_BATTERY_LOW_MV              ((uint16_t)6800u)
@@ -153,6 +159,47 @@
 #define APP_ARM_MIN_CENTI_DEG           ((int16_t)-9000)
 #define APP_ARM_MAX_CENTI_DEG           ((int16_t)9000)
 #define APP_ARM_MOVE_TIME_MS            ((uint16_t)800u)
+
+/*
+ * Host streaming (GUI jog, ROS trajectory points) restarts the servo's
+ * interpolation on every frame. With the 800 ms one-shot time the arm trails
+ * a dragged slider by most of a second, so frames that arrive inside the jog
+ * window use a short per-segment time instead: the servo still finishes each
+ * small step before the next frame lands. A frame after a >400 ms gap goes
+ * back to the 800 ms time so a deliberate press of "send pose" keeps its
+ * smooth, unhurried travel.
+ */
+#define APP_ARM_JOG_WINDOW_MS           ((uint32_t)400u)
+#define APP_ARM_JOG_MOVE_TIME_MS        ((uint16_t)200u)
+
+/*
+ * Bus-servo protection defaults (SET_PARAM 0x60..0x64 overrides them).
+ * The 7.4 V pack feeds the servo rail through the vendor regulator, so a
+ * reading outside 5.5..8.4 V means the arm must not keep pulling current.
+ */
+#define APP_SERVO_OVERTEMP_C            ((int16_t)65)
+#define APP_SERVO_UNDERVOLT_MV          ((uint16_t)5500u)
+#define APP_SERVO_OVERVOLT_MV           ((uint16_t)8400u)
+
+/*
+ * Stall: the servo reports a position more than this far from the target for
+ * longer than the window, after the commanded move had time to finish. 3 deg
+ * sits above the bus-servo dead band and the 0.01 deg quantization.
+ *
+ * The margin has to cover the scan too: the vendor requires 100 ms between
+ * commands, so one joint's angle is refreshed only every ~700 ms. Judging
+ * earlier would compare the target against a reading taken mid-move.
+ */
+#define APP_SERVO_STALL_ERROR_CENTI_DEG ((int16_t)300)
+#define APP_SERVO_STALL_TIME_MS         ((uint16_t)600u)
+#define APP_SERVO_STALL_MARGIN_MS       ((uint16_t)1000u)
+
+/*
+ * Time the comm task waits for one SERVO_CONFIG to finish on the bus: one
+ * 100 ms bus gap, the query slot, the servo's reply timeout and the ACK. Past
+ * this the request is cancelled and the host gets ACK 0x04.
+ */
+#define APP_SERVO_CONFIG_TIMEOUT_MS     ((uint32_t)1000u)
 
 /* ------------------------------- Storage -------------------------------- */
 
@@ -199,5 +246,12 @@
 
 #define APP_COMM_TASK_STACK_BYTES       ((uint32_t)1024u)
 #define APP_CONTROL_TASK_STACK_BYTES    ((uint32_t)1024u)
+
+/*
+ * The servo task builds a 92-byte move frame on its stack and runs the UART
+ * state machine; 768 bytes was enough but 1024 leaves room for the HAL TX
+ * path. It is the lowest-priority task, so a busy slot never delays control.
+ */
+#define APP_SERVO_TASK_STACK_BYTES      ((uint32_t)1024u)
 
 #endif /* __APP_ROBOT_CONFIG_H__ */

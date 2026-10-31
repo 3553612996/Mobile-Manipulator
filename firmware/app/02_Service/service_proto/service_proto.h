@@ -110,6 +110,19 @@ platform_err_t service_proto_send_arm(
                             uint8_t gripper_state);
 
 /*
+ * REPORT_ARM_STATUS (0xCB): measured angles, temperatures, per-joint fault
+ * bits and the servo rail voltage. flags uses PROTOCOL_ARM_FLAG_*; a
+ * temperature of -128 means unmeasured.
+ */
+platform_err_t service_proto_send_arm_status(
+                    uint8_t flags,
+                    uint16_t rail_mv,
+                    const int16_t joint_centi_deg
+                        [PROTOCOL_ARM_JOINT_COUNT],
+                    const int8_t temperature_c[PROTOCOL_ARM_JOINT_COUNT],
+                    const uint8_t fault_bits[PROTOCOL_ARM_JOINT_COUNT]);
+
+/*
  * Measured wheel speeds in FL, FR, RL, RR order, mm/s. Sent at 50 Hz while
  * the host is tuning so the effect of a gain change is visible.
  */
@@ -177,6 +190,20 @@ platform_err_t service_proto_send_crash(uint8_t slot,
                                         uint16_t total,
                                         const uint8_t *data,
                                         uint8_t data_len);
+
+/* ------------------------- Parameter report (0xCC) --------------------- */
+
+/*
+ * REPORT_PARAM, one chunk of the GET_PARAM dump: {chunk, flags, count} then
+ * count records. count is clamped to PROTOCOL_PARAM_RECORD_MAX (10), which
+ * keeps 3 + 10 * 6 = 63 bytes inside the 64-byte payload. flags bit0 marks the
+ * last chunk; the caller decides when the enumeration ends.
+ */
+platform_err_t service_proto_send_param(
+                    uint8_t chunk,
+                    uint8_t flags,
+                    const protocol_param_record_t *records,
+                    uint8_t count);
 
 /* -------------------------- Link diagnostics --------------------------- */
 

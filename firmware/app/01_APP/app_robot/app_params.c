@@ -43,6 +43,14 @@
 #define APP_PARAMS_OFF_MAX_LINEAR   ((uint16_t)(APP_PARAMS_OFF_CMD_TIMEOUT + 2u))
 #define APP_PARAMS_OFF_MAX_ANGULAR  ((uint16_t)(APP_PARAMS_OFF_MAX_LINEAR + 2u))
 
+/* ------------- version 3 arm thresholds, appended to the v2 blob --------- */
+#define APP_PARAMS_OFF_ARM_OVERTEMP     (60u)
+#define APP_PARAMS_OFF_ARM_UNDERVOLT    (62u)
+#define APP_PARAMS_OFF_ARM_OVERVOLT     (64u)
+#define APP_PARAMS_OFF_ARM_STALL_ERROR  (66u)
+#define APP_PARAMS_OFF_ARM_STALL_TIME   (68u)
+#define APP_PARAMS_OFF_ARM_STALL_MARGIN (70u)
+
 /* -------------------------- version 2 calibration blob ------------------- */
 #define APP_PARAMS_OFF_CAL_WHEELBASE     (4u)
 #define APP_PARAMS_OFF_CAL_TRACK         (8u)
@@ -51,6 +59,10 @@
 #define APP_PARAMS_OFF_CAL_DIR           (32u)   /* 4 x i32. */
 #define APP_PARAMS_OFF_CAL_DZ_FWD        (48u)   /* 4 x i32. */
 #define APP_PARAMS_OFF_CAL_DZ_REV        (64u)   /* 4 x i32. */
+
+/* --------------- version 3 arm calibration, appended to the v2 blob ------ */
+#define APP_PARAMS_OFF_CAL_SERVO_ID      (80u)   /* 6 x i32. */
+#define APP_PARAMS_OFF_CAL_SERVO_ZERO    (104u)  /* 6 x i32, 0.01 degree. */
 
 /* ------------------------------ version 1 offsets ------------------------ */
 #define APP_PARAMS_OFF_V1_HALF_LENGTH    (4u)
@@ -75,6 +87,19 @@
 #define APP_PARAMS_MAX_ANGULAR_MIN       ((int32_t)10)
 #define APP_PARAMS_MAX_ANGULAR_MAX       ((int32_t)1500)
 
+/* Arm thresholds, shared by the setters and the parser. */
+#define APP_PARAMS_ARM_TEMP_MIN          ((int32_t)-40)
+#define APP_PARAMS_ARM_TEMP_MAX          ((int32_t)150)
+#define APP_PARAMS_ARM_UNDERVOLT_MIN_MV  ((int32_t)4000)
+#define APP_PARAMS_ARM_OVERVOLT_MAX_MV   ((int32_t)9000)
+#define APP_PARAMS_ARM_STALL_ERROR_MIN   ((int32_t)1)
+#define APP_PARAMS_ARM_STALL_ERROR_MAX   ((int32_t)4500)
+#define APP_PARAMS_ARM_STALL_TIME_MIN_MS ((int32_t)100)
+#define APP_PARAMS_ARM_STALL_TIME_MAX_MS ((int32_t)5000)
+#define APP_PARAMS_ARM_STALL_MARGIN_MAX_MS ((int32_t)2000)
+#define APP_PARAMS_SERVO_ID_MAX          ((int32_t)254)
+#define APP_PARAMS_SERVO_ZERO_MAX        ((int32_t)18000)
+
 //******************************** Variables ********************************//
 
 static struct
@@ -95,6 +120,18 @@ static struct
     int16_t     max_linear_mm_s;
     int16_t     max_angular_mrad_s;
     uint8_t     log_level;
+
+    /* Arm protection (parameter area). */
+    int16_t     arm_overtemp_c;
+    int16_t     arm_undervolt_mv;
+    int16_t     arm_overvolt_mv;
+    int16_t     arm_stall_error_centi_deg;
+    int16_t     arm_stall_time_ms;
+    int16_t     arm_stall_margin_ms;
+
+    /* Arm calibration (calibration area). */
+    uint8_t     servo_id[APP_PARAMS_JOINT_COUNT];
+    int16_t     servo_offset_centi_deg[APP_PARAMS_JOINT_COUNT];
 
     uint8_t     dirty;
 } s_params;
@@ -200,6 +237,13 @@ static void s_reset_param(void)
     s_params.max_linear_mm_s = APP_CHASSIS_MAX_VX_MM_S;
     s_params.max_angular_mrad_s = APP_CHASSIS_MAX_WZ_MRAD_S;
     s_params.log_level = 1u;    /* INFO. */
+
+    s_params.arm_overtemp_c = APP_SERVO_OVERTEMP_C;
+    s_params.arm_undervolt_mv = (int16_t)APP_SERVO_UNDERVOLT_MV;
+    s_params.arm_overvolt_mv = (int16_t)APP_SERVO_OVERVOLT_MV;
+    s_params.arm_stall_error_centi_deg = APP_SERVO_STALL_ERROR_CENTI_DEG;
+    s_params.arm_stall_time_ms = (int16_t)APP_SERVO_STALL_TIME_MS;
+    s_params.arm_stall_margin_ms = (int16_t)APP_SERVO_STALL_MARGIN_MS;
 }
 
 static void s_reset_calib(void)
@@ -220,6 +264,13 @@ static void s_reset_calib(void)
             s_default_deadzone_fwd[wheel];
         s_params.deadzone_rev_permille[wheel] =
             s_default_deadzone_rev[wheel];
+    }
+
+    /* Factory bus map: joint n is servo n, mechanical zero uncalibrated. */
+    for (wheel = 0u; wheel < APP_PARAMS_JOINT_COUNT; wheel++)
+    {
+        s_params.servo_id[wheel] = (uint8_t)wheel;
+        s_params.servo_offset_centi_deg[wheel] = 0;
     }
 }
 
@@ -350,6 +401,56 @@ uint8_t app_params_log_level(void)
 platform_bool_t app_params_log_enabled(uint8_t level)
 {
     return (level >= s_params.log_level) ? PLATFORM_TRUE : PLATFORM_FALSE;
+}
+
+int16_t app_params_arm_overtemp_c(void)
+{
+    return s_params.arm_overtemp_c;
+}
+
+int16_t app_params_arm_undervolt_mv(void)
+{
+    return s_params.arm_undervolt_mv;
+}
+
+int16_t app_params_arm_overvolt_mv(void)
+{
+    return s_params.arm_overvolt_mv;
+}
+
+int16_t app_params_arm_stall_error_centi_deg(void)
+{
+    return s_params.arm_stall_error_centi_deg;
+}
+
+int16_t app_params_arm_stall_time_ms(void)
+{
+    return s_params.arm_stall_time_ms;
+}
+
+int16_t app_params_arm_stall_margin_ms(void)
+{
+    return s_params.arm_stall_margin_ms;
+}
+
+uint8_t app_params_servo_id(uint8_t joint)
+{
+    if (joint >= APP_PARAMS_JOINT_COUNT)
+    {
+        return 0u;
+    }
+
+    return s_params.servo_id[joint];
+}
+
+int16_t app_params_servo_offset_centi_deg(uint8_t joint)
+{
+    if (joint >= APP_PARAMS_JOINT_COUNT)
+    {
+        return 0;
+    }
+
+    return s_params.servo_offset_centi_deg[joint];
 }
 
 //******************************** Writers **********************************//
@@ -540,6 +641,119 @@ platform_err_t app_params_set_max_angular(int32_t value)
     return PLATFORM_ERR_OK;
 }
 
+platform_err_t app_params_set_arm_overtemp(int32_t value)
+{
+    if ((value < APP_PARAMS_ARM_TEMP_MIN) || (value > APP_PARAMS_ARM_TEMP_MAX))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    s_params.arm_overtemp_c = (int16_t)value;
+    s_params.dirty |= APP_PARAMS_DIRTY_PARAM;
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t app_params_set_arm_undervolt(int32_t value)
+{
+    if ((value < APP_PARAMS_ARM_UNDERVOLT_MIN_MV) ||
+        (value >= (int32_t)s_params.arm_overvolt_mv))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    s_params.arm_undervolt_mv = (int16_t)value;
+    s_params.dirty |= APP_PARAMS_DIRTY_PARAM;
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t app_params_set_arm_overvolt(int32_t value)
+{
+    if ((value <= (int32_t)s_params.arm_undervolt_mv) ||
+        (value > APP_PARAMS_ARM_OVERVOLT_MAX_MV))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    s_params.arm_overvolt_mv = (int16_t)value;
+    s_params.dirty |= APP_PARAMS_DIRTY_PARAM;
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t app_params_set_arm_stall_error(int32_t value)
+{
+    if ((value < APP_PARAMS_ARM_STALL_ERROR_MIN) ||
+        (value > APP_PARAMS_ARM_STALL_ERROR_MAX))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    s_params.arm_stall_error_centi_deg = (int16_t)value;
+    s_params.dirty |= APP_PARAMS_DIRTY_PARAM;
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t app_params_set_arm_stall_time(int32_t value)
+{
+    if ((value < APP_PARAMS_ARM_STALL_TIME_MIN_MS) ||
+        (value > APP_PARAMS_ARM_STALL_TIME_MAX_MS))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    s_params.arm_stall_time_ms = (int16_t)value;
+    s_params.dirty |= APP_PARAMS_DIRTY_PARAM;
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t app_params_set_servo_id(uint8_t joint, int32_t value)
+{
+    uint8_t i;
+
+    if ((joint >= APP_PARAMS_JOINT_COUNT) || (value < 0) ||
+        (value > APP_PARAMS_SERVO_ID_MAX))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    /* Two joints on one address would talk to the same servo. */
+    for (i = 0u; i < APP_PARAMS_JOINT_COUNT; i++)
+    {
+        if ((i != joint) && (s_params.servo_id[i] == (uint8_t)value))
+        {
+            return PLATFORM_ERR_PARAM;
+        }
+    }
+
+    s_params.servo_id[joint] = (uint8_t)value;
+    s_params.dirty |= APP_PARAMS_DIRTY_CALIB;
+
+    return PLATFORM_ERR_OK;
+}
+
+platform_err_t app_params_set_servo_offset(uint8_t joint, int32_t value)
+{
+    if (joint >= APP_PARAMS_JOINT_COUNT)
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    if ((value < -APP_PARAMS_SERVO_ZERO_MAX) ||
+        (value > APP_PARAMS_SERVO_ZERO_MAX))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+
+    s_params.servo_offset_centi_deg[joint] = (int16_t)value;
+    s_params.dirty |= APP_PARAMS_DIRTY_CALIB;
+
+    return PLATFORM_ERR_OK;
+}
+
 void app_params_apply_to_chassis(void)
 {
     uint8_t wheel;
@@ -663,6 +877,19 @@ uint16_t app_params_serialize(uint8_t scope,
         s_put_i16(&buffer[APP_PARAMS_OFF_MAX_ANGULAR],
                   s_params.max_angular_mrad_s);
 
+        s_put_i16(&buffer[APP_PARAMS_OFF_ARM_OVERTEMP],
+                  s_params.arm_overtemp_c);
+        s_put_u16(&buffer[APP_PARAMS_OFF_ARM_UNDERVOLT],
+                  (uint16_t)s_params.arm_undervolt_mv);
+        s_put_u16(&buffer[APP_PARAMS_OFF_ARM_OVERVOLT],
+                  (uint16_t)s_params.arm_overvolt_mv);
+        s_put_i16(&buffer[APP_PARAMS_OFF_ARM_STALL_ERROR],
+                  s_params.arm_stall_error_centi_deg);
+        s_put_u16(&buffer[APP_PARAMS_OFF_ARM_STALL_TIME],
+                  (uint16_t)s_params.arm_stall_time_ms);
+        s_put_u16(&buffer[APP_PARAMS_OFF_ARM_STALL_MARGIN],
+                  (uint16_t)s_params.arm_stall_margin_ms);
+
         return length;
     }
 
@@ -701,6 +928,17 @@ uint16_t app_params_serialize(uint8_t scope,
                       (int32_t)s_params.deadzone_rev_permille[wheel]);
         }
 
+        /* Servo address and calibrated zero per joint (version 3). */
+        for (wheel = 0u; wheel < APP_PARAMS_JOINT_COUNT; wheel++)
+        {
+            offset = (uint16_t)(APP_PARAMS_OFF_CAL_SERVO_ID + (wheel * 4u));
+            s_put_i32(&buffer[offset], (int32_t)s_params.servo_id[wheel]);
+
+            offset = (uint16_t)(APP_PARAMS_OFF_CAL_SERVO_ZERO + (wheel * 4u));
+            s_put_i32(&buffer[offset],
+                      (int32_t)s_params.servo_offset_centi_deg[wheel]);
+        }
+
         return length;
     }
 
@@ -714,6 +952,12 @@ static platform_bool_t s_parse_param(const uint8_t *data, uint16_t length,
     int32_t timeout_ms;
     int32_t max_linear;
     int32_t max_angular;
+    int32_t arm_overtemp;
+    int32_t arm_undervolt;
+    int32_t arm_overvolt;
+    int32_t arm_stall_error;
+    int32_t arm_stall_time;
+    int32_t arm_stall_margin;
     uint8_t log_level;
     uint8_t wheel;
     uint8_t gain;
@@ -724,7 +968,13 @@ static platform_bool_t s_parse_param(const uint8_t *data, uint16_t length,
         return PLATFORM_FALSE;
     }
 
-    if ((version == 2u) && (length != APP_PARAMS_BLOB_PARAM_SIZE))
+    if ((version == 2u) && (length != APP_PARAMS_BLOB_PARAM_SIZE_V2))
+    {
+        return PLATFORM_FALSE;
+    }
+
+    if ((version == APP_PARAMS_VERSION) &&
+        (length != APP_PARAMS_BLOB_PARAM_SIZE))
     {
         return PLATFORM_FALSE;
     }
@@ -754,7 +1004,7 @@ static platform_bool_t s_parse_param(const uint8_t *data, uint16_t length,
         return PLATFORM_FALSE;
     }
 
-    if (version == 2u)
+    if (version >= 2u)
     {
         timeout_ms = (int32_t)s_get_u16(&data[APP_PARAMS_OFF_CMD_TIMEOUT]);
         max_linear = (int32_t)s_get_i16(&data[APP_PARAMS_OFF_MAX_LINEAR]);
@@ -778,6 +1028,44 @@ static platform_bool_t s_parse_param(const uint8_t *data, uint16_t length,
         max_angular = APP_CHASSIS_MAX_WZ_MRAD_S;
     }
 
+    if (version >= 3u)
+    {
+        arm_overtemp = (int32_t)s_get_i16(&data[APP_PARAMS_OFF_ARM_OVERTEMP]);
+        arm_undervolt =
+            (int32_t)s_get_u16(&data[APP_PARAMS_OFF_ARM_UNDERVOLT]);
+        arm_overvolt = (int32_t)s_get_u16(&data[APP_PARAMS_OFF_ARM_OVERVOLT]);
+        arm_stall_error =
+            (int32_t)s_get_i16(&data[APP_PARAMS_OFF_ARM_STALL_ERROR]);
+        arm_stall_time =
+            (int32_t)s_get_u16(&data[APP_PARAMS_OFF_ARM_STALL_TIME]);
+        arm_stall_margin =
+            (int32_t)s_get_u16(&data[APP_PARAMS_OFF_ARM_STALL_MARGIN]);
+
+        if ((arm_overtemp < APP_PARAMS_ARM_TEMP_MIN) ||
+            (arm_overtemp > APP_PARAMS_ARM_TEMP_MAX) ||
+            (arm_undervolt < APP_PARAMS_ARM_UNDERVOLT_MIN_MV) ||
+            (arm_undervolt >= arm_overvolt) ||
+            (arm_overvolt > APP_PARAMS_ARM_OVERVOLT_MAX_MV) ||
+            (arm_stall_error < APP_PARAMS_ARM_STALL_ERROR_MIN) ||
+            (arm_stall_error > APP_PARAMS_ARM_STALL_ERROR_MAX) ||
+            (arm_stall_time < APP_PARAMS_ARM_STALL_TIME_MIN_MS) ||
+            (arm_stall_time > APP_PARAMS_ARM_STALL_TIME_MAX_MS) ||
+            (arm_stall_margin > APP_PARAMS_ARM_STALL_MARGIN_MAX_MS))
+        {
+            return PLATFORM_FALSE;
+        }
+    }
+    else
+    {
+        /* Versions 1 and 2 predate the arm: keep the compile-time values. */
+        arm_overtemp = s_params.arm_overtemp_c;
+        arm_undervolt = s_params.arm_undervolt_mv;
+        arm_overvolt = s_params.arm_overvolt_mv;
+        arm_stall_error = s_params.arm_stall_error_centi_deg;
+        arm_stall_time = s_params.arm_stall_time_ms;
+        arm_stall_margin = s_params.arm_stall_margin_ms;
+    }
+
     /* Everything validated: commit. A bad blob must leave RAM untouched. */
     for (wheel = 0u; wheel < APP_PARAMS_WHEEL_COUNT; wheel++)
     {
@@ -792,6 +1080,13 @@ static platform_bool_t s_parse_param(const uint8_t *data, uint16_t length,
     s_params.max_linear_mm_s = (int16_t)max_linear;
     s_params.max_angular_mrad_s = (int16_t)max_angular;
 
+    s_params.arm_overtemp_c = (int16_t)arm_overtemp;
+    s_params.arm_undervolt_mv = (int16_t)arm_undervolt;
+    s_params.arm_overvolt_mv = (int16_t)arm_overvolt;
+    s_params.arm_stall_error_centi_deg = (int16_t)arm_stall_error;
+    s_params.arm_stall_time_ms = (int16_t)arm_stall_time;
+    s_params.arm_stall_margin_ms = (int16_t)arm_stall_margin;
+
     return PLATFORM_TRUE;
 }
 
@@ -805,7 +1100,11 @@ static platform_bool_t s_parse_calib(const uint8_t *data, uint16_t length,
     int32_t deadzone_fwd[APP_PARAMS_WHEEL_COUNT];
     int32_t deadzone_rev[APP_PARAMS_WHEEL_COUNT];
     int8_t dir[APP_PARAMS_WHEEL_COUNT];
+    uint8_t servo_id[APP_PARAMS_JOINT_COUNT];
+    int32_t servo_zero[APP_PARAMS_JOINT_COUNT];
     uint8_t wheel;
+    uint8_t joint;
+    uint8_t other;
     uint16_t offset;
 
     if ((version == 1u) && (length != APP_PARAMS_BLOB_CALIB_SIZE_V1))
@@ -813,7 +1112,13 @@ static platform_bool_t s_parse_calib(const uint8_t *data, uint16_t length,
         return PLATFORM_FALSE;
     }
 
-    if ((version == 2u) && (length != APP_PARAMS_BLOB_CALIB_SIZE))
+    if ((version == 2u) && (length != APP_PARAMS_BLOB_CALIB_SIZE_V2))
+    {
+        return PLATFORM_FALSE;
+    }
+
+    if ((version == APP_PARAMS_VERSION) &&
+        (length != APP_PARAMS_BLOB_CALIB_SIZE))
     {
         return PLATFORM_FALSE;
     }
@@ -894,6 +1199,54 @@ static platform_bool_t s_parse_calib(const uint8_t *data, uint16_t length,
         }
     }
 
+    /*
+     * Older blobs predate the arm, so their servo map keeps whatever is in RAM:
+     * the factory map after boot, the user's map after a RAM-only upgrade.
+     */
+    for (joint = 0u; joint < APP_PARAMS_JOINT_COUNT; joint++)
+    {
+        servo_id[joint] = s_params.servo_id[joint];
+        servo_zero[joint] = (int32_t)s_params.servo_offset_centi_deg[joint];
+    }
+
+    if (version >= 3u)
+    {
+        for (joint = 0u; joint < APP_PARAMS_JOINT_COUNT; joint++)
+        {
+            int32_t id;
+            int32_t zero;
+
+            offset = (uint16_t)(APP_PARAMS_OFF_CAL_SERVO_ID + (joint * 4u));
+            id = s_get_i32(&data[offset]);
+
+            offset = (uint16_t)(APP_PARAMS_OFF_CAL_SERVO_ZERO + (joint * 4u));
+            zero = s_get_i32(&data[offset]);
+
+            if ((id < 0) || (id > APP_PARAMS_SERVO_ID_MAX) ||
+                (zero < -APP_PARAMS_SERVO_ZERO_MAX) ||
+                (zero > APP_PARAMS_SERVO_ZERO_MAX))
+            {
+                return PLATFORM_FALSE;
+            }
+
+            servo_id[joint] = (uint8_t)id;
+            servo_zero[joint] = zero;
+        }
+
+        /* Two joints on one address would talk to the same servo. */
+        for (joint = 0u; joint < APP_PARAMS_JOINT_COUNT; joint++)
+        {
+            for (other = (uint8_t)(joint + 1u);
+                 other < APP_PARAMS_JOINT_COUNT; other++)
+            {
+                if (servo_id[joint] == servo_id[other])
+                {
+                    return PLATFORM_FALSE;
+                }
+            }
+        }
+    }
+
     s_params.wheelbase_mm = wheelbase;
     s_params.track_mm = track;
     s_params.wheel_diameter_x10_mm = diameter_x10;
@@ -904,6 +1257,12 @@ static platform_bool_t s_parse_calib(const uint8_t *data, uint16_t length,
         s_params.wheel_dir[wheel] = dir[wheel];
         s_params.deadzone_fwd_permille[wheel] = (int16_t)deadzone_fwd[wheel];
         s_params.deadzone_rev_permille[wheel] = (int16_t)deadzone_rev[wheel];
+    }
+
+    for (joint = 0u; joint < APP_PARAMS_JOINT_COUNT; joint++)
+    {
+        s_params.servo_id[joint] = servo_id[joint];
+        s_params.servo_offset_centi_deg[joint] = (int16_t)servo_zero[joint];
     }
 
     return PLATFORM_TRUE;
@@ -922,7 +1281,8 @@ platform_bool_t app_params_parse(uint8_t scope,
 
     version = s_get_u16(&data[APP_PARAMS_OFF_VERSION]);
 
-    if ((version != 1u) && (version != APP_PARAMS_VERSION))
+    if ((version != 1u) && (version != 2u) &&
+        (version != APP_PARAMS_VERSION))
     {
         return PLATFORM_FALSE;
     }

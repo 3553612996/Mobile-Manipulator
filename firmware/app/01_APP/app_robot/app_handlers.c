@@ -25,6 +25,7 @@
 #include "app_robot/app_fault.h"
 #include "app_robot/app_tasks.h"
 #include "app_robot/app_params.h"
+#include "app_robot/app_report.h"
 #include "app_robot/app_storage.h"
 #include "app_robot/app_robot_config.h"
 
@@ -32,6 +33,7 @@
 #include "service_arm/service_arm.h"
 #include "service_storage/service_storage.h"
 
+#include "platform_os_task.h"
 #include "platform_os_time.h"
 
 //******************************** Variables ********************************//
@@ -45,6 +47,14 @@ static platform_bool_t s_manual_forward;
  */
 static uint8_t s_param_buffer[APP_PARAMS_BLOB_PARAM_SIZE];
 static uint8_t s_calib_buffer[APP_PARAMS_BLOB_CALIB_SIZE];
+
+/*
+ * SET_ARM_JOINTS is streamed by the host while jogging (10 Hz from the GUI,
+ * trajectory points from ROS). Remember the previous arrival so consecutive
+ * frames can shorten the servo move time; see APP_ARM_JOG_*.
+ */
+static uint32_t s_last_arm_cmd_ms;
+static platform_bool_t s_has_arm_cmd;
 
 //******************************** Functions ********************************//
 
@@ -88,6 +98,8 @@ static protocol_result_t app_handle_set_arm(const protocol_frame_t *frame,
 {
     int16_t angles[PROTOCOL_ARM_JOINT_COUNT];
     uint8_t i;
+    uint32_t now_ms;
+    uint16_t move_time_ms = 0u;
     platform_err_t err;
 
     (void)user_data;
@@ -103,7 +115,26 @@ static protocol_result_t app_handle_set_arm(const protocol_frame_t *frame,
         angles[i] = protocol_get_i16(&frame->payload[(uint32_t)i * 2u]);
     }
 
-    err = service_arm_set_joints(angles, 0u);
+    now_ms = app_handlers_now_ms();
+
+    /*
+     * back-to-back goals mean the host is streaming a jog: use the short
+     * per-segment time so the servo keeps up instead of chasing an 800 ms
+     * interpolation that is replaced every 100 ms.
+     */
+    if ((s_has_arm_cmd == PLATFORM_TRUE) &&
+        ((now_ms - s_last_arm_cmd_ms) <= APP_ARM_JOG_WINDOW_MS))
+    {
+        move_time_ms = APP_ARM_JOG_MOVE_TIME_MS;
+    }
+
+    err = service_arm_set_joints(angles, move_time_ms);
+
+    if (PLATFORM_IS_OK(err))
+    {
+        s_last_arm_cmd_ms = now_ms;
+        s_has_arm_cmd = PLATFORM_TRUE;
+    }
 
     if (err == PLATFORM_ERR_PARAM)
     {
@@ -196,13 +227,180 @@ static protocol_result_t app_handle_clear_fault(
 {
     uint16_t code;
     uint32_t now_ms;
+    protocol_result_t result;
 
     (void)user_data;
 
     code = protocol_get_u16(&frame->payload[0]);
     now_ms = app_handlers_now_ms();
 
-    return app_fault_clear(code, now_ms);
+    result = app_fault_clear(code, now_ms);
+
+    if (result == PROTOCOL_RESULT_OK)
+    {
+        /*
+         * Two latches hold the same condition: the fault arbiter and the arm
+         * service. Releasing only one would leave SET_ENABLE refused. The
+         * control task re-latches while the condition persists.
+         */
+        (void)service_arm_clear_faults();
+        app_tasks_clear_arm_fault_pending();
+    }
+
+    return result;
+}
+
+/*
+ * SERVO_CONFIG (0x0E): joint, operation and one signed value. The bus driver
+ * runs one configuration at a time and the servo task (lowest priority) is
+ * its only caller, so this handler queues the request and sleeps here until
+ * the servo task has executed it. Sleeping, not spinning, is what lets the
+ * lower-priority bus owner run at all.
+ *
+ * The service refuses configuration while the arm holds torque; that arrives
+ * here as BUSY. ID and zero are written back to app_params so the next boot
+ * addresses the same servos with the same mechanical reference.
+ */
+static protocol_result_t app_handle_servo_config(
+                                        const protocol_frame_t *frame,
+                                        void *user_data)
+{
+    platform_servo_cfg_req_t req;
+    platform_err_t err;
+    uint32_t start_ms;
+    int32_t result;
+    uint8_t joint;
+    uint8_t op;
+    uint8_t i;
+    int32_t value;
+
+    (void)user_data;
+
+    joint = frame->payload[0];
+    op = frame->payload[1];
+    value = protocol_get_i32(&frame->payload[2]);
+
+    if ((joint >= PROTOCOL_ARM_JOINT_COUNT) ||
+        (op < PROTOCOL_SERVO_OP_SET_ID) ||
+        (op > PROTOCOL_SERVO_OP_TORQUE))
+    {
+        return PROTOCOL_RESULT_RANGE;
+    }
+
+    switch (op)
+    {
+        case PROTOCOL_SERVO_OP_SET_ID:
+            if ((value < 0) || (value > 254))
+            {
+                return PROTOCOL_RESULT_RANGE;
+            }
+
+            /* Two joints on one address would drive the same servo. */
+            for (i = 0u; i < APP_PARAMS_JOINT_COUNT; i++)
+            {
+                if ((i != joint) &&
+                    (app_params_servo_id(i) == (uint8_t)value))
+                {
+                    return PROTOCOL_RESULT_RANGE;
+                }
+            }
+            break;
+
+        case PROTOCOL_SERVO_OP_SET_BIAS:
+            /* The vendor command carries a signed three-digit offset. */
+            if ((value < -100) || (value > 100))
+            {
+                return PROTOCOL_RESULT_RANGE;
+            }
+            break;
+
+        case PROTOCOL_SERVO_OP_TORQUE:
+            if ((value != 0) && (value != 1))
+            {
+                return PROTOCOL_RESULT_RANGE;
+            }
+            break;
+
+        default:
+            /* CALIBRATE and CLEAR_CALIB take no value. */
+            break;
+    }
+
+    req.joint = joint;
+    req.op = op;
+    req.value = value;
+
+    err = service_arm_config(&req);
+
+    if (err == PLATFORM_ERR_BUSY)
+    {
+        return PROTOCOL_RESULT_BUSY;
+    }
+
+    if (PLATFORM_IS_ERR(err))
+    {
+        return PROTOCOL_RESULT_FAILED;
+    }
+
+    start_ms = app_handlers_now_ms();
+
+    while (service_arm_config_ready() == PLATFORM_FALSE)
+    {
+        if ((uint32_t)(app_handlers_now_ms() - start_ms) >=
+            APP_SERVO_CONFIG_TIMEOUT_MS)
+        {
+            /*
+             * Cancel marks the slot finished (a late ID reply must not be
+             * applied); take it so the next SERVE_CONFIG is not refused as
+             * busy. A request still on the wire keeps `await_kind` set and is
+             * ignored when the reply finally arrives.
+             */
+            service_arm_config_cancel();
+            (void)service_arm_config_take(&result);
+            return PROTOCOL_RESULT_FAILED;
+        }
+
+        (void)platform_os_task_delay_ms(1u);
+    }
+
+    err = service_arm_config_take(&result);
+
+    if (PLATFORM_IS_ERR(err))
+    {
+        return (err == PLATFORM_ERR_PARAM) ? PROTOCOL_RESULT_RANGE
+                                           : PROTOCOL_RESULT_FAILED;
+    }
+
+    /*
+     * SET_ID reports the new address, CALIBRATE the raw angle that became the
+     * reference, CLEAR_CALIB zero. Persist those; bias and torque live inside
+     * the servo and need no record on this board.
+     */
+    if (op == PROTOCOL_SERVO_OP_SET_ID)
+    {
+        if (PLATFORM_IS_ERR(app_params_set_servo_id(joint, result)))
+        {
+            return PROTOCOL_RESULT_FAILED;
+        }
+
+        service_storage_set_clean(PLATFORM_FALSE);
+    }
+    else if ((op == PROTOCOL_SERVO_OP_CALIBRATE) ||
+             (op == PROTOCOL_SERVO_OP_CLEAR_CALIB))
+    {
+        if (PLATFORM_IS_ERR(app_params_set_servo_offset(joint, result)))
+        {
+            return PROTOCOL_RESULT_FAILED;
+        }
+
+        service_storage_set_clean(PLATFORM_FALSE);
+    }
+    else
+    {
+        /* Bias and torque: nothing to persist. */
+    }
+
+    return PROTOCOL_RESULT_OK;
 }
 
 static protocol_result_t app_handle_set_gripper(const protocol_frame_t *frame,
@@ -322,6 +520,7 @@ static protocol_result_t app_handle_set_param(const protocol_frame_t *frame,
     int32_t limit;
     float_t gain_value;
     platform_err_t err;
+    service_arm_protection_t protection;
 
     (void)user_data;
 
@@ -456,6 +655,68 @@ static protocol_result_t app_handle_set_param(const protocol_frame_t *frame,
         service_storage_set_clean(PLATFORM_FALSE);
 
         if (app_tasks_reload_limits() == PLATFORM_FALSE)
+        {
+            return PROTOCOL_RESULT_FAILED;
+        }
+
+        return PROTOCOL_RESULT_OK;
+    }
+
+    /*
+     * Arm protection thresholds (0x60~0x64). They may be written while the
+     * arm holds torque: the change applies to the next evaluation, and a
+     * looser threshold cannot un-latch a fault that already happened.
+     */
+    if ((param_id >= PROTOCOL_PARAM_ARM_OVERTEMP_C) &&
+        (param_id <= PROTOCOL_PARAM_ARM_STALL_TIME))
+    {
+        switch (param_id)
+        {
+            case PROTOCOL_PARAM_ARM_OVERTEMP_C:
+                err = app_params_set_arm_overtemp(value);
+                break;
+
+            case PROTOCOL_PARAM_ARM_UNDERVOLT_MV:
+                err = app_params_set_arm_undervolt(value);
+                break;
+
+            case PROTOCOL_PARAM_ARM_OVERVOLT_MV:
+                err = app_params_set_arm_overvolt(value);
+                break;
+
+            case PROTOCOL_PARAM_ARM_STALL_ERROR:
+                err = app_params_set_arm_stall_error(value);
+                break;
+
+            default:
+                err = app_params_set_arm_stall_time(value);
+                break;
+        }
+
+        if (err == PLATFORM_ERR_PARAM)
+        {
+            return PROTOCOL_RESULT_RANGE;
+        }
+
+        if (PLATFORM_IS_ERR(err))
+        {
+            return PROTOCOL_RESULT_FAILED;
+        }
+
+        service_storage_set_clean(PLATFORM_FALSE);
+
+        /* Push the whole set: the service validates the pair ordering too. */
+        protection.overtemp_c = app_params_arm_overtemp_c();
+        protection.undervolt_mv =
+            (uint16_t)app_params_arm_undervolt_mv();
+        protection.overvolt_mv = (uint16_t)app_params_arm_overvolt_mv();
+        protection.stall_error_centi_deg =
+            app_params_arm_stall_error_centi_deg();
+        protection.stall_time_ms = (uint16_t)app_params_arm_stall_time_ms();
+        protection.stall_margin_ms =
+            (uint16_t)app_params_arm_stall_margin_ms();
+
+        if (PLATFORM_IS_ERR(service_arm_set_protection(&protection)))
         {
             return PROTOCOL_RESULT_FAILED;
         }
@@ -673,6 +934,23 @@ static protocol_result_t app_handle_storage_query(const protocol_frame_t *frame,
     return PROTOCOL_RESULT_OK;
 }
 
+/*
+ * GET_PARAM: the ACK only means "the dump is queued". No values are copied in
+ * the handler; the report tick walks app_params one chunk at a time, so even a
+ * full dump never blocks the comm task. A request that arrives mid-stream
+ * restarts at chunk 0.
+ */
+static protocol_result_t app_handle_get_param(const protocol_frame_t *frame,
+                                              void *user_data)
+{
+    (void)frame;
+    (void)user_data;
+
+    app_report_request_param_dump();
+
+    return PROTOCOL_RESULT_OK;
+}
+
 static protocol_result_t app_handle_log_export(const protocol_frame_t *frame,
                                                void *user_data)
 {
@@ -839,9 +1117,21 @@ void app_handlers_on_key(platform_key_id_t id, service_key_event_t event,
 
 void app_handlers_process_pending(uint32_t now_ms)
 {
+    uint16_t code;
+
     if (app_tasks_take_pending_estop() == PLATFORM_TRUE)
     {
         (void)app_fault_raise(PROTOCOL_FAULT_ESTOP, now_ms, PLATFORM_TRUE);
+    }
+
+    /*
+     * The control task already disabled the arm when it latched the condition
+     * (a stalled or overheated servo must drop torque immediately); this only
+     * arbitrates severity and reports it.
+     */
+    if (app_tasks_take_pending_arm_fault(&code) == PLATFORM_TRUE)
+    {
+        (void)app_fault_raise(code, now_ms, PLATFORM_FALSE);
     }
 }
 
@@ -865,7 +1155,9 @@ static const struct
     { PROTOCOL_CMD_STORAGE_QUERY,  app_handle_storage_query },
     { PROTOCOL_CMD_LOG_EXPORT,     app_handle_log_export },
     { PROTOCOL_CMD_CRASH_READ,     app_handle_crash_read },
-    { PROTOCOL_CMD_LOG_CLEAR,      app_handle_log_clear }
+    { PROTOCOL_CMD_LOG_CLEAR,      app_handle_log_clear },
+    { PROTOCOL_CMD_SERVO_CONFIG,   app_handle_servo_config },
+    { PROTOCOL_CMD_GET_PARAM,      app_handle_get_param }
 };
 
 #define APP_HANDLER_COUNT \

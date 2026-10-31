@@ -7,7 +7,7 @@
 | 文件 | 职责 |
 | --- | --- |
 | `platform_bsp_motor.h` | 直流电机 + 编码器：使能、带符号占空比、编码器/状态读取 |
-| `platform_bsp_servo.h` | 六轴舵机：六关节角度下发、状态回读 |
+| `platform_bsp_servo.h` | 六轴总线舵机：角度下发、角度/温度/电压回读、关节映射与在线配置（ID/偏置/零点/力矩） |
 | `platform_bsp_key.h` | 按键：去抖后的按下状态与按住时长 |
 | `platform_bsp_led.h` | 状态灯：按视觉语义开关，极性由驱动决定 |
 | `platform_bsp_buzzer.h` | 无源/有源蜂鸣器：开关，节奏由上层决定 |
@@ -39,7 +39,7 @@
 | 平台契约 | 04_Impl 适配器 | 06_BSP 具体驱动 |
 | --- | --- | --- |
 | `platform_motor_ops_t` | `impl_bsp_motor.c` | `bsp_motor_dual_pwm.c`：双 PWM H 桥 + 定时器编码器 |
-| `platform_servo_ops_t` | `impl_bsp_servo.c` | `bsp_servo_softpwm.c`：六路 GPIO 软件 PWM |
+| `platform_servo_ops_t` | `impl_bsp_servo.c` | `bsp_servo_bus.c`：UART5 半双工 + YH ASCII 总线舵机（`bsp_servo_softpwm.c` 为未注册的备用驱动） |
 | `platform_key_ops_t` | `impl_bsp_key.c` | `bsp_key_gpio.c`：GPIO 按键 + 时间去抖 |
 | `platform_led_ops_t` | `impl_bsp_led.c` | `bsp_led_gpio.c`：GPIO 状态灯 |
 | `platform_buzzer_ops_t` | `impl_bsp_buzzer.c` | `bsp_buzzer_gpio.c`：GPIO 蜂鸣器 |
@@ -67,6 +67,12 @@ platform_temphumi_register(&aht21_ops, &aht21_ctx);
 3. `platform_*_init()` 执行器件初始化；
 4. 业务任务开始运行。
 
+舵机另有一步：`platform_servo_set_joint_map()` 必须在 `platform_servo_init()`
+之前调用。映射（每关节的舵机地址与标定零点）是**每台机器独有的数据**，
+来自标定区；驱动初始化时会按它建立查询顺序，之后再改不会重新寻址。
+总线只能有一个主人，`platform_servo_poll()` 由专门的 `appServo` 任务调用，
+其它任务只通过 `set_angles()` / `config()` 投递请求。
+
 未注册就调用 `platform_*_init/set/get` 返回 `PLATFORM_ERR_NOT_INITIALIZED`。重复注册同一个 id 返回 `PLATFORM_ERR_ALREADY_INIT`。
 
 ## 设备与单位
@@ -76,8 +82,10 @@ platform_temphumi_register(&aht21_ops, &aht21_ctx);
 | 电机 | `duty_permille` | 千分比，`-1000..+1000`，符号表示方向 |
 | 电机 | `encoder_count` | 有符号累计计数 |
 | 电机 | `speed_mm_s` | mm/s，驱动能测才填 |
-| 舵机 | `joint_centi_deg` | 0.01°，与串口协议一致 |
+| 舵机 | `joint_centi_deg` | 0.01°，与串口协议一致，已扣除标定零点 |
 | 舵机 | `move_time_ms` | 毫秒，0 表示尽快 |
+| 舵机 | `temperature_c` / `voltage_mv` | °C / mV；未测到用 `PLATFORM_SERVO_TEMP_INVALID`（-128）/ `PLATFORM_SERVO_VOLTAGE_INVALID` 标记 |
+| 舵机 | `fault_bits` | 每关节位掩码：离线、回包错由驱动置位，过温/过压/堵转由服务层置位 |
 | Flash | `address` / `length` | 字节，地址从 0 开始 |
 | 温湿度 | `temperature_centi_c` | 0.01 °C |
 | 温湿度 | `humidity_centi_rh` | 0.01 %RH |

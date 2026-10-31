@@ -78,7 +78,9 @@ typedef enum
     PROTOCOL_CMD_STORAGE_QUERY = 0x0A,
     PROTOCOL_CMD_LOG_EXPORT = 0x0B,
     PROTOCOL_CMD_CRASH_READ = 0x0C,
-    PROTOCOL_CMD_LOG_CLEAR = 0x0D
+    PROTOCOL_CMD_LOG_CLEAR = 0x0D,
+    PROTOCOL_CMD_SERVO_CONFIG = 0x0E,
+    PROTOCOL_CMD_GET_PARAM = 0x0F
 } protocol_cmd_t;
 
 /* MCU -> Host periodic/event reports. */
@@ -93,7 +95,9 @@ typedef enum
     PROTOCOL_REPORT_WHEEL_DUTY = 0xC7,
     PROTOCOL_REPORT_STORAGE = 0xC8,
     PROTOCOL_REPORT_LOG = 0xC9,
-    PROTOCOL_REPORT_CRASH = 0xCA
+    PROTOCOL_REPORT_CRASH = 0xCA,
+    PROTOCOL_REPORT_ARM_STATUS = 0xCB,
+    PROTOCOL_REPORT_PARAM = 0xCC
 } protocol_report_t;
 
 /* Second byte of an ACK payload. */
@@ -122,6 +126,8 @@ typedef enum
 #define PROTOCOL_LEN_LOG_EXPORT         ((uint8_t)6u)
 #define PROTOCOL_LEN_CRASH_READ         ((uint8_t)2u)
 #define PROTOCOL_LEN_LOG_CLEAR          ((uint8_t)2u)
+#define PROTOCOL_LEN_SERVO_CONFIG       ((uint8_t)6u)   /* joint+op+int32. */
+#define PROTOCOL_LEN_GET_PARAM          ((uint8_t)0u)
 
 #define PROTOCOL_ARM_JOINT_COUNT        ((uint8_t)6u)
 
@@ -135,6 +141,63 @@ typedef enum
 #define PROTOCOL_LEN_REPORT_STORAGE     ((uint8_t)24u)
 #define PROTOCOL_LEN_REPORT_LOG_HEADER  ((uint8_t)15u)
 #define PROTOCOL_LEN_REPORT_CRASH_HEADER ((uint8_t)7u)
+
+/*
+ * REPORT_ARM_STATUS: flags, rail voltage, then six {angle int16, temp int8,
+ * fault uint8} entries. The voltage is the first online joint's reading.
+ */
+#define PROTOCOL_LEN_REPORT_ARM_STATUS  ((uint8_t)27u)
+#define PROTOCOL_ARM_STATUS_HEADER      ((uint8_t)3u)
+#define PROTOCOL_ARM_STATUS_JOINT_LEN   ((uint8_t)4u)
+
+#define PROTOCOL_ARM_FLAG_ENABLED       ((uint8_t)0x01u)
+#define PROTOCOL_ARM_FLAG_FAULTED       ((uint8_t)0x02u)
+#define PROTOCOL_ARM_FLAG_OFFLINE       ((uint8_t)0x04u)
+
+/*
+ * REPORT_PARAM: header {chunk uint8, flags uint8, count uint8} followed by
+ * count x {kind uint8, id uint8, value int32}. A record is 6 bytes, so the
+ * 64-byte payload holds 10 of them. The host reassembles chunks in order and
+ * stops at flags bit0; GET_PARAM restarts at chunk 0.
+ *
+ * kind says what id means:
+ *   0 parameter area   id = SET_PARAM id (0x10..0x12, 0x20..0x2B, 0x40,
+ *                      0x60..0x64)
+ *   1 calibration      id = SET_PARAM id (0x01, 0x02, 0x50..0x5F)
+ *   2 servo id         id = joint 0..5
+ *   3 servo zero       id = joint 0..5, value = 0.01 degree
+ *   4 read-only        id = PROTOCOL_PARAM_INFO_*, not writable via SET_PARAM
+ */
+#define PROTOCOL_PARAM_KIND_PARAM       ((uint8_t)0u)
+#define PROTOCOL_PARAM_KIND_CALIB       ((uint8_t)1u)
+#define PROTOCOL_PARAM_KIND_SERVO_ID    ((uint8_t)2u)
+#define PROTOCOL_PARAM_KIND_SERVO_OFFSET ((uint8_t)3u)
+#define PROTOCOL_PARAM_KIND_INFO        ((uint8_t)4u)
+
+#define PROTOCOL_PARAM_INFO_WHEELBASE_MM    ((uint8_t)0x01u)
+#define PROTOCOL_PARAM_INFO_STALL_MARGIN_MS ((uint8_t)0x02u)
+
+#define PROTOCOL_LEN_REPORT_PARAM_HEADER ((uint8_t)3u)
+#define PROTOCOL_PARAM_RECORD_BYTES     ((uint8_t)6u)
+#define PROTOCOL_PARAM_RECORD_MAX       ((uint8_t)((PROTOCOL_PAYLOAD_MAX - \
+                                        PROTOCOL_LEN_REPORT_PARAM_HEADER) / \
+                                        PROTOCOL_PARAM_RECORD_BYTES))
+#define PROTOCOL_PARAM_FLAG_LAST        ((uint8_t)0x01u)
+
+/* Per-joint fault bits of REPORT_ARM_STATUS (mirror of the platform bits). */
+#define PROTOCOL_SERVO_FAULT_OFFLINE    ((uint8_t)0x01u)
+#define PROTOCOL_SERVO_FAULT_OVERTEMP   ((uint8_t)0x02u)
+#define PROTOCOL_SERVO_FAULT_UNDERVOLT  ((uint8_t)0x04u)
+#define PROTOCOL_SERVO_FAULT_OVERVOLT   ((uint8_t)0x08u)
+#define PROTOCOL_SERVO_FAULT_STALL      ((uint8_t)0x10u)
+#define PROTOCOL_SERVO_FAULT_REPLY      ((uint8_t)0x20u)
+
+/* SERVO_CONFIG operations, equal to PLATFORM_SERVO_CFG_*. */
+#define PROTOCOL_SERVO_OP_SET_ID        ((uint8_t)0x01u)
+#define PROTOCOL_SERVO_OP_SET_BIAS      ((uint8_t)0x02u)  /* +/-100. */
+#define PROTOCOL_SERVO_OP_CALIBRATE     ((uint8_t)0x03u)  /* Current is zero. */
+#define PROTOCOL_SERVO_OP_CLEAR_CALIB   ((uint8_t)0x04u)
+#define PROTOCOL_SERVO_OP_TORQUE        ((uint8_t)0x05u)  /* 0 off, 1 on. */
 
 /* The frame payload stack is 64 bytes; the two variable-length reports share
  * it between their fixed header and the text/data bytes. */
@@ -182,8 +245,10 @@ typedef enum
 #define PROTOCOL_FAULT_JOINT_LIMIT      ((uint16_t)0x0301u)
 #define PROTOCOL_FAULT_JOINT_STALL      ((uint16_t)0x0302u)
 #define PROTOCOL_FAULT_TRAJECTORY       ((uint16_t)0x0303u)
+#define PROTOCOL_FAULT_ARM_OFFLINE      ((uint16_t)0x0304u)
 #define PROTOCOL_FAULT_BATTERY_LOW      ((uint16_t)0x0401u)
 #define PROTOCOL_FAULT_OVERTEMP         ((uint16_t)0x0402u)
+#define PROTOCOL_FAULT_ARM_VOLTAGE      ((uint16_t)0x0403u)
 #define PROTOCOL_FAULT_ESTOP            ((uint16_t)0x0501u)
 #define PROTOCOL_FAULT_PARAM_INVALID    ((uint16_t)0x0601u)
 #define PROTOCOL_FAULT_CALIB_INVALID    ((uint16_t)0x0602u)
@@ -256,7 +321,27 @@ typedef enum
 #define PROTOCOL_PARAM_DIRECTION_A      ((uint8_t)0x5Cu)
 #define PROTOCOL_PARAM_DIRECTION_D      ((uint8_t)0x5Fu)
 
+/*
+ * Arm protection thresholds; every value is a plain integer (no x1000):
+ *   0x60 over-temperature, degrees Celsius
+ *   0x61 under-voltage, millivolts      0x62 over-voltage, millivolts
+ *   0x63 stall error, 0.01 degrees      0x64 stall window, milliseconds
+ */
+#define PROTOCOL_PARAM_ARM_OVERTEMP_C   ((uint8_t)0x60u)
+#define PROTOCOL_PARAM_ARM_UNDERVOLT_MV ((uint8_t)0x61u)
+#define PROTOCOL_PARAM_ARM_OVERVOLT_MV  ((uint8_t)0x62u)
+#define PROTOCOL_PARAM_ARM_STALL_ERROR  ((uint8_t)0x63u)
+#define PROTOCOL_PARAM_ARM_STALL_TIME   ((uint8_t)0x64u)
+
 //******************************** Declaring ********************************//
+
+/* One REPORT_PARAM entry, in wire order. */
+typedef struct
+{
+    uint8_t kind;
+    uint8_t id;
+    int32_t value;
+} protocol_param_record_t;
 
 typedef struct
 {

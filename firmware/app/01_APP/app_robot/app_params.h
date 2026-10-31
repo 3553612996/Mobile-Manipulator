@@ -24,7 +24,9 @@
  *   - per-wheel PID gains (as x1000 integers, the same unit the protocol uses),
  *   - the log level, the command timeout and the velocity limits,
  *   - the chassis calibration: wheelbase, track, wheel diameter, and per wheel
- *     the encoder scale, direction and reliable-start duty.
+ *     the encoder scale, direction and reliable-start duty,
+ *   - the arm protection thresholds,
+ *   - the arm calibration: each joint's bus servo ID and calibrated zero.
  *
  * What does not
  * -------------
@@ -54,26 +56,30 @@
 //******************************** Defines **********************************//
 
 /*
- * Layout version. 2 added the per-wheel calibration fields and the limit
- * fields. The parser still accepts version 1 so a board flashed with the old
- * firmware keeps its saved gains and counts instead of silently reverting to
- * the compile-time defaults.
+ * Layout version. 3 added the arm protection thresholds (parameter blob) and
+ * the per-joint servo ID / calibrated zero (calibration blob). The parser
+ * still accepts versions 1 and 2 so a board flashed with older firmware keeps
+ * its saved gains, counts and geometry instead of silently reverting to the
+ * compile-time defaults.
  */
-#define APP_PARAMS_VERSION          ((uint16_t)2u)
+#define APP_PARAMS_VERSION          ((uint16_t)3u)
 
 #define APP_PARAMS_WHEEL_COUNT      (4u)
 #define APP_PARAMS_GAIN_COUNT       (3u)
+#define APP_PARAMS_JOINT_COUNT      (6u)
 
 /* Encoded sizes, fixed by this file and checked on load. */
-#define APP_PARAMS_BLOB_PARAM_SIZE  ((uint16_t)60u)
-#define APP_PARAMS_BLOB_CALIB_SIZE  ((uint16_t)80u)
+#define APP_PARAMS_BLOB_PARAM_SIZE  ((uint16_t)72u)
+#define APP_PARAMS_BLOB_CALIB_SIZE  ((uint16_t)128u)
 
 /* Largest blob, for the boot-time load buffer. */
 #define APP_PARAMS_BLOB_MAX_SIZE    APP_PARAMS_BLOB_CALIB_SIZE
 
-/* Version 1 sizes, accepted on load only. */
+/* Earlier sizes, accepted on load only. */
 #define APP_PARAMS_BLOB_PARAM_SIZE_V1 ((uint16_t)56u)
 #define APP_PARAMS_BLOB_CALIB_SIZE_V1 ((uint16_t)28u)
+#define APP_PARAMS_BLOB_PARAM_SIZE_V2 ((uint16_t)60u)
+#define APP_PARAMS_BLOB_CALIB_SIZE_V2 ((uint16_t)80u)
 
 /* Scope values are the protocol's: 0 = parameter area, 1 = calibration. */
 #define APP_PARAMS_SCOPE_PARAM      PROTOCOL_STORAGE_SCOPE_PARAM
@@ -115,6 +121,18 @@ int16_t  app_params_max_linear_mm_s(void);
 int16_t  app_params_max_angular_mrad_s(void);
 uint8_t  app_params_log_level(void);
 
+/* Arm protection thresholds (parameter area). */
+int16_t  app_params_arm_overtemp_c(void);
+int16_t  app_params_arm_undervolt_mv(void);
+int16_t  app_params_arm_overvolt_mv(void);
+int16_t  app_params_arm_stall_error_centi_deg(void);
+int16_t  app_params_arm_stall_time_ms(void);
+int16_t  app_params_arm_stall_margin_ms(void);
+
+/* Joint identity and calibrated zero (calibration area). */
+uint8_t  app_params_servo_id(uint8_t joint);
+int16_t  app_params_servo_offset_centi_deg(uint8_t joint);
+
 /* TRUE when a line at this level should reach the log ring. Level 0 is
  * DEBUG, 3 is ERROR: a higher configured level filters more. */
 platform_bool_t app_params_log_enabled(uint8_t level);
@@ -138,6 +156,17 @@ platform_err_t app_params_set_wheel_deadzone(uint8_t wheel, int32_t fwd,
 platform_err_t app_params_set_cmd_timeout_ms(int32_t value);
 platform_err_t app_params_set_max_linear(int32_t value);
 platform_err_t app_params_set_max_angular(int32_t value);
+
+/* Arm protection thresholds; each marks the parameter area dirty. */
+platform_err_t app_params_set_arm_overtemp(int32_t value);
+platform_err_t app_params_set_arm_undervolt(int32_t value);
+platform_err_t app_params_set_arm_overvolt(int32_t value);
+platform_err_t app_params_set_arm_stall_error(int32_t value);
+platform_err_t app_params_set_arm_stall_time(int32_t value);
+
+/* Servo identity; marks the calibration area dirty. */
+platform_err_t app_params_set_servo_id(uint8_t joint, int32_t value);
+platform_err_t app_params_set_servo_offset(uint8_t joint, int32_t value);
 
 /* Push every stored value into the chassis service: gains, geometry, per-wheel
  * scale/direction/start duty and the velocity limits. Control task only: the

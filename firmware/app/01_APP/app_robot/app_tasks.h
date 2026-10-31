@@ -14,10 +14,12 @@
  *   - comm task: protocol parsing/handlers, fault poll, reports, single UART
  *     transmitter;
  *   - control task: key scan, PID parameter queue drain, chassis apply,
- *     odometry, buzzer.
- * The only cross-task messages are the PID queue and the emergency-stop flag.
+ *     odometry, arm protection, buzzer;
+ *   - servo task: the bus state machine (one query/move slot at a time).
+ * The cross-task messages are the PID queue, the emergency-stop flag and the
+ * latched arm fault the control task hands to the comm task for reporting.
  *
- * @version V1.0 2026-10-29
+ * @version V1.1 2026-10-31
  *
  * @note 1 tab == 4 spaces.
  *
@@ -52,6 +54,9 @@ typedef struct
 
 void app_tasks_comm_entry(void *argument);
 void app_tasks_control_entry(void *argument);
+
+/* Advance the servo bus. Lowest priority; waits on nothing but the bus gap. */
+void app_tasks_servo_entry(void *argument);
 
 /*
  * Queue one gain change for the control task. Returns PLATFORM_FALSE if the
@@ -88,5 +93,16 @@ void app_tasks_request_estop(uint32_t beep_until_ms);
 
 /* Consume the pending emergency-stop request. Comm task only. */
 platform_bool_t app_tasks_take_pending_estop(void);
+
+/*
+ * The control task watches service_arm_update()'s latched bits and leaves one
+ * protocol fault code here, because only the comm task may raise a fault (it
+ * owns the UART). Returns PLATFORM_TRUE once per newly latched condition; a
+ * CLEAR_FAULT re-arms the watch, so a persisting condition is reported again.
+ */
+platform_bool_t app_tasks_take_pending_arm_fault(uint16_t *code);
+
+/* Called by CLEAR_FAULT after the arm latches were cleared. Comm task only. */
+void app_tasks_clear_arm_fault_pending(void);
 
 #endif /* __APP_TASKS_H__ */

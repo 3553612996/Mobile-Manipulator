@@ -31,6 +31,7 @@
 #include "app_robot/app_robot_config.h"
 
 #include "service_chassis/service_chassis.h"
+#include "service_arm/service_arm.h"
 #include "service_key/service_key.h"
 #include "service_proto/service_proto.h"
 
@@ -43,6 +44,10 @@
 static volatile platform_bool_t s_pending_estop;
 static volatile uint32_t         s_beep_until_ms;
 static platform_bool_t           s_buzzer_on;
+
+/* Control -> comm: one code per newly latched arm condition. */
+static volatile uint16_t         s_pending_arm_fault;
+static platform_bool_t           s_arm_fault_seen;
 
 //******************************** Functions ********************************//
 
@@ -148,6 +153,25 @@ platform_bool_t app_tasks_take_pending_estop(void)
     return PLATFORM_TRUE;
 }
 
+platform_bool_t app_tasks_take_pending_arm_fault(uint16_t *code)
+{
+    if ((s_pending_arm_fault == 0u) || (code == NULL))
+    {
+        return PLATFORM_FALSE;
+    }
+
+    *code = s_pending_arm_fault;
+    s_pending_arm_fault = 0u;
+
+    return PLATFORM_TRUE;
+}
+
+void app_tasks_clear_arm_fault_pending(void)
+{
+    s_pending_arm_fault = 0u;
+    s_arm_fault_seen = PLATFORM_FALSE;
+}
+
 static void app_tasks_drain_pid_queue(uint32_t now_ms)
 {
     app_pid_param_msg_t msg;
@@ -179,6 +203,99 @@ static void app_tasks_drain_pid_queue(uint32_t now_ms)
                         (service_chassis_pid_gain_t)msg.gain,
                         msg.value);
         }
+    }
+}
+
+/*
+ * One arm condition maps to one protocol code. Temperature and rail voltage
+ * come first because they threaten every joint at once; OFFLINE covers both a
+ * missing reply and a malformed one (REPLY), and stall is the last resort.
+ */
+static uint16_t app_tasks_arm_fault_code(const service_arm_status_t *status)
+{
+    uint8_t i;
+
+    for (i = 0u; i < SERVICE_ARM_JOINT_COUNT; i++)
+    {
+        if ((status->fault_bits[i] & SERVICE_ARM_FAULT_OVERTEMP) != 0u)
+        {
+            return PROTOCOL_FAULT_OVERTEMP;
+        }
+    }
+
+    for (i = 0u; i < SERVICE_ARM_JOINT_COUNT; i++)
+    {
+        if ((status->fault_bits[i] &
+             (SERVICE_ARM_FAULT_UNDERVOLT | SERVICE_ARM_FAULT_OVERVOLT)) != 0u)
+        {
+            return PROTOCOL_FAULT_ARM_VOLTAGE;
+        }
+    }
+
+    for (i = 0u; i < SERVICE_ARM_JOINT_COUNT; i++)
+    {
+        if ((status->fault_bits[i] &
+             (SERVICE_ARM_FAULT_OFFLINE | SERVICE_ARM_FAULT_REPLY)) != 0u)
+        {
+            return PROTOCOL_FAULT_ARM_OFFLINE;
+        }
+    }
+
+    for (i = 0u; i < SERVICE_ARM_JOINT_COUNT; i++)
+    {
+        if ((status->fault_bits[i] & SERVICE_ARM_FAULT_STALL) != 0u)
+        {
+            return PROTOCOL_FAULT_JOINT_STALL;
+        }
+    }
+
+    return 0u;
+}
+
+/*
+ * Raise one report per latched condition, not one per control tick: the latch
+ * stays set until the host clears it, and app_fault_raise would otherwise send
+ * an EVENT frame every 10 ms.
+ */
+static void app_tasks_watch_arm_fault(void)
+{
+    service_arm_status_t status;
+    uint16_t code;
+
+    if (PLATFORM_IS_ERR(service_arm_get_status(&status)))
+    {
+        return;
+    }
+
+    if (status.faulted == PLATFORM_FALSE)
+    {
+        s_arm_fault_seen = PLATFORM_FALSE;
+        return;
+    }
+
+    if ((s_arm_fault_seen == PLATFORM_FALSE) && (s_pending_arm_fault == 0u))
+    {
+        code = app_tasks_arm_fault_code(&status);
+
+        if (code != 0u)
+        {
+            s_pending_arm_fault = code;
+            s_arm_fault_seen = PLATFORM_TRUE;
+        }
+    }
+}
+
+void app_tasks_servo_entry(void *argument)
+{
+    uint32_t now_ms;
+
+    (void)argument;
+
+    for (;;)
+    {
+        now_ms = platform_os_ticks_to_ms(platform_os_tick_get());
+        (void)service_arm_poll(now_ms);
+        (void)platform_os_task_delay_ms(APP_SERVO_PERIOD_MS);
     }
 }
 
@@ -226,6 +343,8 @@ void app_tasks_control_entry(void *argument)
     s_pending_estop = PLATFORM_FALSE;
     s_beep_until_ms = 0u;
     s_buzzer_on = PLATFORM_FALSE;
+    s_pending_arm_fault = 0u;
+    s_arm_fault_seen = PLATFORM_FALSE;
     last_tick = platform_os_tick_get();
 
     for (;;)
@@ -249,6 +368,10 @@ void app_tasks_control_entry(void *argument)
 
         (void)service_chassis_apply(now_ms, elapsed_ms);
         service_chassis_update_odometry(elapsed_ms);
+
+        /* Judged here, reported by the comm task: one UART owner stays. */
+        (void)service_arm_update(now_ms);
+        app_tasks_watch_arm_fault();
 
         beep = (now_ms < s_beep_until_ms) ? PLATFORM_TRUE : PLATFORM_FALSE;
 

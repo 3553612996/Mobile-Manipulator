@@ -34,4 +34,12 @@ void app_report_init(void);
 /* One scheduling tick. Call every comm-task iteration with the same clock. */
 void app_report_tick(uint32_t now_ms);
 
+/*
+ * Queue the REPORT_PARAM dump for GET_PARAM: the next tick starts at chunk 0
+ * and sends one chunk per tick until the last flag. A second request during a
+ * stream simply restarts it, so the host never has to track a partial set.
+ * Comm task only, like every other sender.
+ */
+void app_report_request_param_dump(void);
+
 #endif /* __APP_REPORT_H__ */
