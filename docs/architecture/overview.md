@@ -56,7 +56,7 @@ MCU 侧还承担最后一道保护：**通信断流 200 ms 主动停车**。这�
                         │ PWM + 编码器
                      STM32F103RCT6
                         ├── UART ◄──► RK3566
-                        ├── 六路 GPIO ──► 六轴 PWM 舵机（软件 PWM）
+                        ├── UART5 半双工 ──► 六轴总线舵机（YH ASCII 协议，菊花链）
                         ├── ADC ──► 电池分压监测
                         └── I2C ──► IMU
 
@@ -127,7 +127,7 @@ RK3566
 | `03_Platform` | 稳定接口：`platform_*` 设备/OS 契约，以及通用算法（环形缓冲、CRC、滤波） | 无（只定义） |
 | `04_Impl` | 把 03 的契约落到具体实现：HAL 适配、FreeRTOS 适配、板级设备实例化 | HAL、FreeRTOS、BSP |
 | `05_Middlewares` | 与产品契约相关的中间件：串口协议表与编解码 | 03 的 platform_common + CRC |
-| `06_BSP` | 具体芯片/模块驱动：双 PWM 电机、软件 PWM 舵机、ADC、GPIO | Platform 的 `platform_mcu`（不直接碰 HAL） |
+| `06_BSP` | 具体芯片/模块驱动：双 PWM 电机、总线舵机、ADC、GPIO | Platform 的 `platform_mcu`（不直接碰 HAL） |
 | `07_Toolchain` / `08_Vender` / `99_Utils` | 工具链、厂商参考代码、通用宏与工具 | 无 |
 
 **依赖只向下**：`01_APP → 02_Service → 03_Platform → 04_Impl → 06_BSP`。app 里不允许出现 `HAL_*`、`FreeRTOS.h`、寄存器名；service 里不允许包含板级头文件。

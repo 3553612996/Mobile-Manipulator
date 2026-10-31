@@ -2,7 +2,7 @@
 
 模块级视角：包怎么划分、接口怎么定、状态机怎么转、并发怎么管、错误怎么处理。
 
-相关文档：[项目框架](overview.md) · [串口协议](protocol.md) · [编码规范](../conventions/coding-style.md)
+相关文档：[项目框架](overview.md) · [串口协议](protocol.md) · [ROS 2 文件级说明](ros2-files.md) · [MCU 文件级说明](mcu-files.md) · [编码规范](../conventions/coding-style.md)
 
 ---
 
@@ -12,7 +12,7 @@
 firmware/
 ├── bootloader/   独立工程，只做三件事：判断跳转、接收升级、写 Flash
 ├── app/          主固件
-└── shared/       两端共用：协议、CRC、故障码定义
+└── shared/       两端共用：协议、CRC、故障码定义（预留；当前实现在 app/05_Middlewares/protocol）
 
 mobile_manipulator_ws/src/
 ├── robot_interfaces/ 自定义 msg / srv / action
@@ -219,19 +219,22 @@ AUTO 在协议中预留，当前没有内部自主运动任务，固件不会主
 
 ### 6.1 STM32 侧
 
-FreeRTOS 上跑三个任务，定义在 `app_user_init.c` 的常量表里：
+FreeRTOS 上跑四个任务，定义在 `app_user_init.c` 的常量表里：
 
 | 任务 | 优先级 | 周期 | 栈 | 职责 |
 | --- | --- | --- | --- | --- |
-| `appComm` | HIGH | 10 ms（UART 事件唤醒） | 见 `APP_COMM_TASK_STACK_BYTES` | 协议处理与 ACK、故障轮询、全部上报帧、导出队列出栈 |
-| `appCtrl` | ABOVE_NORMAL | 10 ms | 见 `APP_CONTROL_TASK_STACK_BYTES` | 按键、PID 参数出队、四轮速度环、里程计、蜂鸣器 |
+| `appComm` | HIGH | 10 ms（UART 事件唤醒） | 见 `APP_COMM_TASK_STACK_BYTES` | 协议处理与 ACK、故障轮询、全部上报帧、导出队列出栈、机械臂故障上报 |
+| `appCtrl` | ABOVE_NORMAL | 10 ms | 见 `APP_CONTROL_TASK_STACK_BYTES` | 按键、PID 参数出队、四轮速度环、里程计、机械臂保护判定、蜂鸣器 |
 | `appStorage` | LOW | 10 ms | 见 `APP_STORAGE_TASK_STACK_BYTES` | Flash 单写者：保存、日志/故障入环、清除、导出产生 |
+| `appServo` | LOW | 5 ms | 见 `APP_SERVO_TASK_STACK_BYTES` | UART5 舵机总线状态机：运动帧与 PRAD/PRTV 轮询、配置执行 |
 
-**为什么是三个而不是五个**：上报本身不耗时（四帧合计不到 40 字节 / 周期），独立成任务只会增加同步点。通信超时在 `appComm` 里以 10 ms 粒度轮询，控制环仍由 `appCtrl` 独占——这样 PID 的浮点状态只有控制任务写，不存在并发修改。机械臂插补当前由 `service_arm` 在 `appCtrl` 中推进，等真实舵机总线需要更长耗时时再拆任务。
+**为什么是四个而不是五个**：上报本身不耗时（四帧合计不到 40 字节 / 周期），独立成任务只会增加同步点。通信超时在 `appComm` 里以 10 ms 粒度轮询，控制环仍由 `appCtrl` 独占——这样 PID 的浮点状态只有控制任务写，不存在并发修改。
+
+舵机总线单独成任务，原因不是耗时长，而是**协议本身有节奏**：供应商要求两条命令至少间隔 100 ms，所以总线必须由一个长期存在的状态机按槽推进，不能"调用即发送"；否则控制任务要么被 100 ms 阻塞，要么把轮询挤丢。它排在最低优先级，晚一个槽只影响下一次回读，不影响电机。机械臂的**保护判定**仍在 `appCtrl`（10 ms 粒度），总线任务只负责把回读搬进来。
 
 第三个任务是存储：一次扇区擦除会把 SPI 总线占住 150 ms~1 s，任何直接调用 `service_storage_*` 的任务都会被卡住——`appComm` 会触发 200 ms 指令超时，`appCtrl` 会让电机保持上一次占空比。所以 Flash 只有一个所有者 `appStorage`，其他任务只往 `appStore` 队列里放 24 B 的描述符。它排在最低优先级：存储永远不紧急，慢一点只影响日志，不影响运动。
 
-**只有一个发送者**：串口 TX 只在 `appComm` 里调用。控制任务要上报（按键长按急停）时置 `s_pending_estop` 标志，由通信任务变成事件帧；`appStorage` 不碰 UART，它把 `REPORT_LOG` / `REPORT_CRASH` / `REPORT_STORAGE` 放进 `appExport` 队列，由 `appComm` 在 `service_proto_process()` 之后调用 `app_storage_pump()` 统一发出。PID 调参走 `appPid` 队列从通信任务传给控制任务，队列按值拷贝，参数在控制任务里才写入 PID。
+**每个串口只有一个发送者**：上位机串口 TX 只在 `appComm` 里调用；舵机总线 TX 只在 `appServo` 里调用（单线半双工，两个发送者就会撞线）。控制任务要上报（按键长按急停）时置 `s_pending_estop` 标志，由通信任务变成事件帧；`appStorage` 不碰 UART，它把 `REPORT_LOG` / `REPORT_CRASH` / `REPORT_STORAGE` 放进 `appExport` 队列，由 `appComm` 在 `service_proto_process()` 之后调用 `app_storage_pump()` 统一发出。PID 调参走 `appPid` 队列从通信任务传给控制任务，队列按值拷贝，参数在控制任务里才写入 PID。
 
 速度环取 10 ms 而不是 1 ms：当前 13 线编码器经 4 倍频、1:90 减速后约 24828 counts/mm，1 ms 内一个计数相当于约 40 mm/s，PID 反馈会被量化噪声主导。10 ms 下仍有 100 Hz 的控制频率，且四个浮点环与里程计都在控制任务预算内。若后续换更高线数编码器或加装速度滤波，再评估提高控制频率。
 
@@ -240,7 +243,8 @@ FreeRTOS 上跑三个任务，定义在 `app_user_init.c` 的常量表里：
 | 中断 | 抢占优先级 | 做什么 |
 | --- | --- | --- |
 | 急停 EXTI | 最高（0） | **直接关闭 PWM**，置标志位；不调用任何 FreeRTOS API |
-| 串口 DMA 空闲 | 6 | `vTaskNotifyGiveFromISR(proto_task)`，仅此 |
+| 串口 DMA 空闲（USART3） | 6 | `vTaskNotifyGiveFromISR(proto_task)`，仅此 |
+| 舵机总线 RXNE（UART5） | 6 | 收一个字节进环形缓冲；不发通知，`appServo` 每 5 ms 自己来取 |
 | 编码器溢出 | 6 | 计数修正，< 5 µs |
 | SysTick | 15（最低） | FreeRTOS 时基 |
 
@@ -267,7 +271,7 @@ FreeRTOS 上跑三个任务，定义在 `app_user_init.c` 的常量表里：
 
 | 节点 | 执行器 | 回调组 | 理由 |
 | --- | --- | --- | --- |
-| `base_bridge` | 单线程 | 默认 | 50Hz，耗时短 |
+| `base_bridge` | 4 线程 | 服务在 `ReentrantCallbackGroup` | 服务回调要阻塞等 ACK（最坏 4×200 ms），单线程会让 20 ms 速度流断掉，固件随即停车 |
 | `vision_detector` | 多线程 | `ReentrantCallbackGroup` | 推理耗时，不能阻塞其他回调 |
 | `task_manager` | 多线程 | `ReentrantCallbackGroup` | 会同步调用其他服务 |
 

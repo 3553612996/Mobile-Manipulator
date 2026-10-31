@@ -17,6 +17,8 @@ docs/
 | [architecture/software-design.md](architecture/software-design.md) | 软件结构：包划分、接口、状态机、并发、错误处理、参数管理 |
 | [architecture/protocol.md](architecture/protocol.md) | 串口协议 v1：帧格式、命令字、CRC、超时、故障码、测试向量 |
 | [architecture/robot-base-design.md](architecture/robot-base-design.md) | 底盘串口桥接：分层、线程与时序、接口、设计决策、实测记录 |
+| [architecture/ros2-files.md](architecture/ros2-files.md) | 文件级说明：从 launch 到编解码，每个文件的职责与接口（参数、返回、作用） |
+| [architecture/mcu-files.md](architecture/mcu-files.md) | MCU 侧文件级说明：从 01_APP 到 06_BSP 的每个文件、任务与队列、接口表 |
 | [architecture/flash-layout.md](architecture/flash-layout.md) | 外部 Flash 布局：参数/标定/镜像/故障/日志区域、记录格式、掉电安全、寿命预算 |
 
 ## 工程规范
