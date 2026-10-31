@@ -4,6 +4,12 @@
 // CRC parameters and payload byte order. It is deliberately free of rclcpp so
 // the codec can be unit tested on a PC without a serial port, and can later be
 // reused by a standalone transport node.
+//
+// 帧格式（多字节小端）：
+//   AA 55 | LEN | CMD | SEQ | PAYLOAD(LEN-2 字节) | CRC_LO CRC_HI
+//   LEN = 2 + 负载长度，合法范围 2..66（最短是无负载的 ESTOP）
+//   CRC-16/CCITT-FALSE 覆盖 LEN..PAYLOAD，不含帧头 AA 55
+//   ACK 帧：CMD = 原命令 | 0x80，负载 = [被回的原 SEQ, 结果码]
 
 #ifndef ROBOT_BASE__PROTOCOL_HPP_
 #define ROBOT_BASE__PROTOCOL_HPP_

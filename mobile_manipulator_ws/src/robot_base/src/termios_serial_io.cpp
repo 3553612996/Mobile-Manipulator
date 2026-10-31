@@ -77,6 +77,8 @@ public:
       return false;
     }
 
+    // 下面这几行就是"115200 8N1、无校验、无硬件流控、无回显"在 termios 里的写法。
+    // 少任何一项，现象都是收到的字节是乱的，或者根本读不到。
     cfmakeraw(&tio);
     tio.c_cflag |= CLOCAL | CREAD;
     tio.c_cflag &= ~(PARENB | CSTOPB);
@@ -134,6 +136,7 @@ public:
     // A USB serial adapter that is unplugged can leave a valid fd behind:
     // poll reports HUP/ERR and read() then returns 0 forever. Treat that as a
     // link failure so Stm32Link can close the fd and reopen the device.
+    // 一句话：拔线后 fd 仍然"有效"，只能靠 poll 的事件发现，读返回值看不出来。
     if ((p.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0U) {
       return -1;
     }
@@ -159,6 +162,8 @@ public:
       return false;
     }
 
+    // 200 ms 还写不完就当失败。一帧 8 字节在 115200 下不到 1 ms，
+    // 拖到这么久基本是驱动或硬件出了问题，继续等只会拖住整个定时器。
     std::size_t written = 0;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
 

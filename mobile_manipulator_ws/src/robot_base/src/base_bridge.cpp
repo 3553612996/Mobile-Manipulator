@@ -95,6 +95,9 @@ public:
     // Service callbacks block while waiting for an ACK (up to 4 x 200 ms).
     // They live in a reentrant group and the executor runs several threads so
     // the 20 ms velocity timer keeps streaming during that wait.
+    //
+    // 换成默认的单线程执行器会出事：服务回调阻塞的 800 ms 里定时器跑不了，
+    // 固件收不到速度帧就停车并报 0x0202——按一下"使能"，车反而停了。
     services_group_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
     set_enable_srv_ = create_service<std_srvs::srv::SetBool>(
       "set_enable",
@@ -145,6 +148,7 @@ public:
     // Stop the RX thread before the publishers and TF broadcaster are
     // destroyed. Without this, a shutdown can crash while a late report
     // callback publishes through a half-destroyed node.
+    // 中文一句话：先停读线程再让成员析构，否则 Ctrl+C 会偶发段错误。
     if (link_) {
       link_->close();
     }
@@ -248,6 +252,12 @@ private:
 
   // The stream must never stop while the link is alive. It carries the last
   // command, or zero when the command is stale or the chassis is not enabled.
+  //
+  // 三条时序规则合并在这里：
+  //   1. 速度帧由 20 ms 定时器发，不挂在 /cmd_vel 回调上；固件 200 ms 收不到
+  //      速度帧就停车并锁存故障 0x0202。
+  //   2. 命令过期或未使能时不是"停发"，而是照发零速——停发等于触发通信超时。
+  //   3. 没使能时任何 /cmd_vel 都不透传，车不会因为收到指令就动。
   void on_velocity_tick()
   {
     if (!link_->is_open() || !link_->link_alive()) {
@@ -334,6 +344,8 @@ private:
 
     // REPORT_ODOM has no wz; derive it from the two side speeds. The wheel
     // separation must match the firmware calibration (SET_PARAM 0x01).
+    // 位姿是直接用 MCU 的积分结果（x/y 毫米 -> 米），ROS 侧不再二次积分；
+    // 只有角速度是这里算的：(vr - vl) / 轮距。轮距对不上，位姿和 twist 会自相矛盾。
     const double vl = static_cast<double>(odom->vl_mm_s);
     const double vr = static_cast<double>(odom->vr_mm_s);
     message.twist.twist.linear.x = (vl + vr) / 2000.0;
@@ -382,6 +394,8 @@ private:
       return;
     }
 
+    // MCU 报 INIT 说明它刚重启过、航向从 0 重新开始，解卷绕要重新起头。
+    // 注意：串口断线不会走到这里——断线时 MCU 还在继续积分，重置反而造假跳变。
     const uint8_t previous_state = state_.exchange(status->state);
     if (status->state == static_cast<uint8_t>(protocol::State::INIT)) {
       // The MCU restarted (or is still initializing): its heading starts over,
@@ -406,6 +420,8 @@ private:
     battery_mv_.store(status->battery_mv);
     temperature_c_.store(status->temperature_c);
     jitter_us_.store(status->jitter_us);
+    // 使能门控只有一个来源：固件说自己是 MANUAL 才放行速度命令。
+    // 这样丢一帧状态也不会把指令漏到一台没使能的车身上。
     enabled_.store(status->state == static_cast<uint8_t>(protocol::State::MANUAL));
 
     robot_interfaces::msg::RobotStatus message;
@@ -512,6 +528,9 @@ private:
 
   // ---------------------------------------------------------- link / diag
 
+  // 每秒跑一次，负责链路的"看护"：
+  //   端口还开着但很久没帧 -> 关掉（USB 拔掉后 fd 会假性有效）；
+  //   端口关着 -> 每 2 s 重试一次 open，插回去能自己恢复。
   void on_link_timer()
   {
     const auto now_steady = std::chrono::steady_clock::now();

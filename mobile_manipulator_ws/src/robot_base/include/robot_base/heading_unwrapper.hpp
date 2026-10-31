@@ -20,6 +20,8 @@ public:
   static constexpr double kCentiDegToRad = 0.01 * kPi / 180.0;
 
   // Returns the continuous heading in radians.
+  // 输入是固件上报的、已经卷绕到 (-180°, 180°] 的航向。
+  // 只累加"最短角差"，不直接用绝对值：这样跨 ±180° 时不会跳变。
   double update(int16_t theta_centi_deg)
   {
     const double raw = static_cast<double>(theta_centi_deg) * kCentiDegToRad;
@@ -30,6 +32,8 @@ public:
       return continuous_rad_;
     }
 
+    // atan2(sin, cos) 把任意角差折到 (-pi, pi]：179° -> -179° 的 358° 跳变
+    // 会被解释成 +2°，而不是转一整圈。这个写法在姿态和电机电角度里都通用。
     const double delta = std::atan2(
       std::sin(raw - last_raw_rad_), std::cos(raw - last_raw_rad_));
     continuous_rad_ += delta;

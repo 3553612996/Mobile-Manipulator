@@ -39,6 +39,8 @@ bool Stm32Link::open(const std::string & port, int baud, std::string * error)
 {
   std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
 
+  // 重开前必须先把旧 RX 线程停掉：那个线程在用 io_ 和 parser_，
+  // 和下面这行重置同时发生就是数据竞争。
   if (rx_thread_.joinable()) {
     stop_.store(true);
     rx_thread_.join();
@@ -157,6 +159,8 @@ Stm32Link::AckResult Stm32Link::send_with_ack(
     raw = protocol::build_frame(cmd, seq, payload);
   }
 
+  // 先登记 waiter，再写串口。顺序反了会漏掉"发出去后几毫秒就回来的 ACK"，
+  // 结果白等满一个超时再重发。
   auto waiter = std::make_shared<AckWaiter>();
   const uint16_t key = ack_key(cmd, seq);
   {
@@ -165,6 +169,8 @@ Stm32Link::AckResult Stm32Link::send_with_ack(
   }
 
   bool wrote_any = false;
+  // 每次重发用的都是同一份 raw：SEQ 不变。固件对重复 SEQ 直接回缓存结果、
+  // 不会执行两次，所以总重发时长必须短于固件的去重窗口（1000 ms）。
   for (int attempt = 0; attempt <= retries; ++attempt) {
     if (!link_alive()) {
       if (error != nullptr) {
@@ -203,6 +209,9 @@ Stm32Link::AckResult Stm32Link::send_with_ack(
   return result;
 }
 
+// 唯一的读线程。串口读是阻塞的，放在 ROS 回调里要么挡住其它回调，
+// 要么没人调回调时数据就丢了，所以单独开一个线程。
+// 帧解析完在这里回调 on_frame_，节点侧要注意它跑在别的线程上。
 void Stm32Link::rx_loop()
 {
   auto last_byte = std::chrono::steady_clock::now();
@@ -218,6 +227,8 @@ void Stm32Link::rx_loop()
       continue;
     }
 
+    // 50 ms 内没有新字节就丢掉半个帧：115200 下完整一帧只要 6 ms，
+    // 凑不齐只能是断流或插拔。只清解析状态，不动计数器。
     const auto now = std::chrono::steady_clock::now();
     if (now - last_byte > kByteGapReset) {
       parser_.reset();

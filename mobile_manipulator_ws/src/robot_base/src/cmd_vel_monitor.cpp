@@ -6,6 +6,9 @@
 namespace robot_base
 {
 
+// 返回要打的那条告警文本，没东西要报就返回 nullopt。
+// 两个作用：把"这个字段发不出去"这件事说出来（不静默丢弃），
+// 同时限频——导航栈 20 Hz 发带 linear.y 的命令，每帧一条 WARN 会刷爆日志。
 std::optional<std::string> CmdVelMonitor::update(
   double linear_x, double linear_y, double linear_z,
   double angular_x, double angular_y, double angular_z,

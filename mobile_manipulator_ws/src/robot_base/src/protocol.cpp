@@ -88,6 +88,8 @@ std::optional<uint8_t> Frame::result() const
   return payload[1];
 }
 
+// CRC-16/CCITT-FALSE 的逐位实现：poly = 0x1021，不反射，初值由调用者给。
+// 不查表是为了和 STM32 侧的实现逐行对得上，出问题时好两边对拍。
 uint16_t crc16_update(uint16_t crc, uint8_t byte)
 {
   crc ^= static_cast<uint16_t>(static_cast<uint16_t>(byte) << 8);
@@ -132,6 +134,7 @@ std::vector<uint8_t> build_frame(
   }
 
   // CRC covers LEN..PAYLOAD, i.e. everything after the two head bytes.
+  // 不含帧头 AA 55：解析器可以边收边累加，遇到假的 AA 也不必回头重算。
   const uint16_t crc = crc16_ccitt(frame.data() + 2U, frame.size() - 2U);
   frame.push_back(static_cast<uint8_t>(crc & 0xFFU));
   frame.push_back(static_cast<uint8_t>((crc >> 8) & 0xFFU));
@@ -144,6 +147,9 @@ std::vector<uint8_t> build_frame(
   return build_frame(cmd, seq, payload.data(), payload.size());
 }
 
+// 逐字节状态机，不是"找帧头再切分"。
+// 串口一次 read 到的可能是半帧，也可能是三帧半，这个函数对任意切分都成立；
+// LEN 越界或 CRC 不符就退回找帧头，所以一帧坏掉不会连累后面的帧。
 std::vector<Frame> FrameParser::feed(const uint8_t * data, std::size_t len)
 {
   std::vector<Frame> frames;
@@ -314,6 +320,9 @@ std::vector<uint8_t> encode_log_clear(uint8_t source)
 
 // ------------------------------------------------------------------ upstream
 
+// 严格 14 字节，多一个少一个都不解 —— 长度对不上说明协议版本不一致，
+// 猜着解析只会得到看似合理的错数据。
+// 单位：x/y 是毫米，theta 是 0.01°，vl/vr 是 mm/s；换到 SI 一律在 base_bridge 做。
 std::optional<OdomData> decode_odom(const std::vector<uint8_t> & payload)
 {
   if (payload.size() != 14U) {
