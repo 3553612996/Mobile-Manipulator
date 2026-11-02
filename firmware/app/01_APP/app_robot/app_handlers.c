@@ -27,6 +27,7 @@
 #include "app_robot/app_params.h"
 #include "app_robot/app_storage.h"
 #include "app_robot/app_robot_config.h"
+#include "app_robot/app_motion_test.h"
 
 #include "service_chassis/service_chassis.h"
 #include "service_arm/service_arm.h"
@@ -809,6 +810,9 @@ void app_handlers_on_key(platform_key_id_t id, service_key_event_t event,
 
     now_ms = app_handlers_now_ms();
 
+#if (APP_MOTION_TEST_ENABLE != 0)
+    app_motion_test_on_key(event, now_ms);
+#else
     if (event == SERVICE_KEY_EVENT_SHORT_PRESS)
     {
         if ((app_state_motion_allowed() == PLATFORM_FALSE) ||
@@ -835,6 +839,7 @@ void app_handlers_on_key(platform_key_id_t id, service_key_event_t event,
     service_chassis_emergency_stop();
     s_manual_forward = PLATFORM_FALSE;
     app_tasks_request_estop(now_ms + APP_KEY_BEEP_MS);
+#endif
 }
 
 void app_handlers_process_pending(uint32_t now_ms)

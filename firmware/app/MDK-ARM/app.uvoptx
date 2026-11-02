@@ -1081,7 +1081,7 @@
 
   <Group>
     <GroupName>Impl/Wrapper</GroupName>
-    <tvExp>1</tvExp>
+    <tvExp>0</tvExp>
     <tvExpOptDlg>0</tvExpOptDlg>
     <cbSel>0</cbSel>
     <RteFlg>0</RteFlg>
@@ -1802,6 +1802,18 @@
       <bDave2>0</bDave2>
       <PathWithFileName>../01_APP/app_robot/app_user_init.c</PathWithFileName>
       <FilenameWithoutPath>app_user_init.c</FilenameWithoutPath>
+      <RteFlg>0</RteFlg>
+      <bShared>0</bShared>
+    </File>
+    <File>
+      <GroupNumber>16</GroupNumber>
+      <FileNumber>101</FileNumber>
+      <FileType>1</FileType>
+      <tvExp>0</tvExp>
+      <tvExpOptDlg>0</tvExpOptDlg>
+      <bDave2>0</bDave2>
+      <PathWithFileName>..\01_APP\app_robot\app_motion_test.c</PathWithFileName>
+      <FilenameWithoutPath>app_motion_test.c</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>

@@ -29,6 +29,7 @@
 #include "app_robot/app_params.h"
 #include "app_robot/app_storage.h"
 #include "app_robot/app_robot_config.h"
+#include "app_robot/app_motion_test.h"
 
 #include "service_chassis/service_chassis.h"
 #include "service_key/service_key.h"
@@ -249,6 +250,9 @@ void app_tasks_control_entry(void *argument)
 
         (void)service_chassis_apply(now_ms, elapsed_ms);
         service_chassis_update_odometry(elapsed_ms);
+
+        /* Key calibration moves use this tick's fresh odometry. */
+        app_motion_test_tick(now_ms);
 
         beep = (now_ms < s_beep_until_ms) ? PLATFORM_TRUE : PLATFORM_FALSE;
 
