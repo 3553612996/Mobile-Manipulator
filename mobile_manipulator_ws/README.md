@@ -1,6 +1,6 @@
 # mobile_manipulator_ws
 
-RK3566 侧的 ROS 2 Humble 工作空间，对应本项目的移动抓取机器人。M1 只建立**可编译的包骨架**：每个包都有 `package.xml`、`CMakeLists.txt`、源码占位目录和职责说明，节点与 launch 在后续里程碑逐个加入。
+RK3566 侧的 ROS 2 Humble 工作空间，对应本项目的移动抓取机器人。M1 建立了**可编译的包骨架**；到 M3 时 `robot_base` 串口桥接、`robot_lidar` X2 驱动和 `robot_bringup` launch 已落地，其余节点在后续里程碑逐个加入。
 
 ## 环境
 
