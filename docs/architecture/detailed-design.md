@@ -915,7 +915,7 @@ linear.x  = (vl + vr) / 2000.0                    [m/s]
 angular.z = (vr - vl) / 1000.0 / wheel_separation_m  [rad/s]
 ```
 
-`wheel_separation_m` 默认 0.24 m，对应固件轮距 240 mm。v1 没有 `GET_PARAM`，改标定后必须人工同步 yaml，否则位姿（固件积分）与 twist（ROS 计算）会互相矛盾，EKF 缓慢漂移。
+`wheel_separation_m` 默认 0.165 m，对应固件轮距 165 mm。v1 没有 `GET_PARAM`，改标定后必须人工同步 yaml，否则位姿（固件积分）与 twist（ROS 计算）会互相矛盾，EKF 缓慢漂移。
 
 **协方差**：`REPORT_ODOM` 观测不到的自由度必须填 `1e6`，不能留 0。`robot_localization` 把 0 读作"该量测完全准确"，会让轮式里程计的 z / roll / pitch 和 `linear.y` 盖过 IMU 的真实估计，且不报任何错。x、y、yaw 保持小幅占位值，接入定位前按实测重标。
 
@@ -965,7 +965,7 @@ REPORT_STATUS.state == MANUAL (2)  → enabled_ = true
 | --- | --- | --- |
 | `port` | `/dev/robot_stm32` | udev 固定名；未安装规则时为 `/dev/ttyUSB0` |
 | `baud` | `115200` | 8N1，无流控 |
-| `wheel_separation_m` | `0.24` | 必须与固件轮距标定一致 |
+| `wheel_separation_m` | `0.165` | 必须与固件轮距标定一致 |
 | `velocity_period_ms` | `20` | 速度帧周期 |
 | `cmd_vel_timeout_s` | `0.5` | 超时后发零速 |
 | `link_timeout_s` | `0.5` | 无帧判定失联 |
@@ -1440,7 +1440,7 @@ Host 发 CLEAR_FAULT
 | 机械臂上报 | 50 ms | `APP_ARM_PERIOD_MS` |
 | 状态 / 心跳 | 100 ms | `APP_STATUS_PERIOD_MS` |
 | 指令超时 | 200 ms | `APP_CHASSIS_CMD_TIMEOUT_MS` |
-| 轮距 / 轴距 | 240 / 300 mm | `half_width 120`、`half_length 150` |
+| 轮距 / 轴距 | 165 / 170 mm | 实测；`half_width 82`、`half_length 85` |
 | 轮径 | 60 mm | `APP_CHASSIS_WHEEL_DIAMETER_MM` |
 | counts/rev | 4680 | `APP_CHASSIS_COUNTS_PER_REV` |
 | counts/mm ×1000 | 24828 | `APP_CHASSIS_COUNTS_PER_MM_X1000` |

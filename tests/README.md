@@ -29,6 +29,7 @@ tests/
 | [`unit/app/test_app_state.c`](unit/app/test_app_state.c) | L1 | `01_APP/app_robot/app_state` | M3 | 无 |
 | [`unit/app/test_app_fault.c`](unit/app/test_app_fault.c) | L1 | `01_APP/app_robot/app_fault` | M3 | 底盘/机械臂/协议服务桩 |
 | [`unit/app/test_app_params.c`](unit/app/test_app_params.c) | L1 | `01_APP/app_robot/app_params` | 存储子系统 | 底盘增益/几何/比例/限速写入桩 |
+| [`unit/app/test_app_motion_test.c`](unit/app/test_app_motion_test.c) | L1 | `01_APP/app_robot/app_motion_test` | M3 | 底盘使能/速度/里程计桩 |
 | [`unit/app/test_app_storage.c`](unit/app/test_app_storage.c) | L1 | `01_APP/app_robot/app_storage` | 存储子系统 | 内存队列、存储服务/协议桩 |
 
 上位机的编解码测试在 [`tools/host_gui/test_protocol.py`](../tools/host_gui/test_protocol.py)，与被测代码同目录（依赖 `host_gui.protocol` 的 import 关系），不复制到 `tests/`。
@@ -56,6 +57,7 @@ L3 台架测试不在 `tests/`：它需要在真机上跑，工具是 [`tools/be
 | `test_app_state.c` | `build/test_app_state` |
 | `test_app_fault.c` | `build/test_app_fault` |
 | `test_app_params.c` | `build/test_app_params` |
+| `test_app_motion_test.c` | `build/test_app_motion_test` |
 | `test_app_storage.c` | `build/test_app_storage` |
 | `host_gui/test_protocol.py` | `python tools/host_gui/test_protocol.py` |
 

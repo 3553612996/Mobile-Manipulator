@@ -393,6 +393,38 @@ static void test_v1_blobs_still_load(void)
           "v1 keeps the default reverse start duty");
 }
 
+static void test_legacy_wheelbase_migrates(void)
+{
+    uint8_t blob[APP_PARAMS_BLOB_CALIB_SIZE];
+    uint16_t size;
+
+    app_params_init();
+    size = app_params_serialize(APP_PARAMS_SCOPE_CALIB, blob,
+                                (uint16_t)sizeof(blob));
+
+    /* A v2 blob written before the 2026-11-02 measurement held 300 / 240. */
+    put_i32(&blob[4], 300);
+    CHECK(app_params_parse(APP_PARAMS_SCOPE_CALIB, blob, size) ==
+          PLATFORM_TRUE, "legacy calib blob accepted");
+    CHECK(app_params_half_length_mm() == APP_CHASSIS_HALF_LENGTH_MM,
+          "300 mm placeholder migrates to the measured wheelbase");
+    CHECK(app_params_track_mm() == APP_CHASSIS_TRACK_MM,
+          "old 240 mm track default migrates with it");
+
+    /* A host-calibrated track width must survive the wheelbase migration. */
+    app_params_init();
+    size = app_params_serialize(APP_PARAMS_SCOPE_CALIB, blob,
+                                (uint16_t)sizeof(blob));
+    put_i32(&blob[4], 300);
+    put_i32(&blob[8], 250);
+    CHECK(app_params_parse(APP_PARAMS_SCOPE_CALIB, blob, size) ==
+          PLATFORM_TRUE, "legacy blob with calibrated track accepted");
+    CHECK(app_params_half_length_mm() == APP_CHASSIS_HALF_LENGTH_MM,
+          "legacy wheelbase still migrates");
+    CHECK(app_params_track_mm() == 250,
+          "non-default track width is preserved");
+}
+
 static void test_parse_rejects_bad_blobs(void)
 {
     uint8_t blob[APP_PARAMS_BLOB_PARAM_SIZE];
@@ -502,6 +534,7 @@ int main(void)
     test_calib_roundtrip_and_bounds();
     test_calib_writer_limits();
     test_v1_blobs_still_load();
+    test_legacy_wheelbase_migrates();
     test_parse_rejects_bad_blobs();
     test_dirty_per_scope();
     test_reset_marks_dirty_and_reloads();

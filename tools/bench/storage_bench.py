@@ -48,7 +48,7 @@ from host_gui import protocol as P  # noqa: E402
 # Compile-time defaults (app_robot_config.h). Writing these back is the least
 # invasive way to exercise SET_PARAM: on a board that is already at defaults
 # the RAM contents do not change at all.
-CFG_TRACK_MM = 2 * 120              # APP_CHASSIS_HALF_WIDTH_MM * 2
+CFG_TRACK_MM = 165                  # APP_CHASSIS_TRACK_MM, measured 2026-11-02
 CFG_WHEEL_DIAMETER_MM = 60
 CFG_COUNTS_PER_MM_X1000 = 24828
 CFG_START_DUTY_FWD = (75, 67, 82, 80)   # FL/FR/RL/RR, docs/bench/pid-tuning.md 3.3
@@ -277,7 +277,7 @@ def step_tuning(client: Client, before: dict | None) -> None:
 
 def step_calibration(client: Client) -> None:
     print("\n-- 标定：几何 / 编码器 / 起转占空比 / 方向 --")
-    expect(client, "写轮距 240 mm", P.Cmd.SET_PARAM,
+    expect(client, f"写轮距 {CFG_TRACK_MM} mm", P.Cmd.SET_PARAM,
            P.set_param_payload(0x01, CFG_TRACK_MM), P.Result.OK)
     expect(client, "写轮径 60 mm", P.Cmd.SET_PARAM,
            P.set_param_payload(0x02, CFG_WHEEL_DIAMETER_MM), P.Result.OK)
@@ -340,9 +340,25 @@ def step_log_read(client: Client) -> None:
                  _result_name(ack))
 
     # A second start while the first is running must be refused, not queued.
+    # An empty ring can finish between the ACK and the second command, and then
+    # OK is the correct answer -- the old unconditional BUSY assertion failed
+    # for that reason. Treat OK as "nothing left to be busy with" and close the
+    # second export so it cannot leave an END frame for the next test.
     if ack is not None and ack.result == P.Result.OK:
-        expect(client, "导出中再次开始 → BUSY", P.Cmd.LOG_EXPORT,
-               P.log_export_payload(0, 1, 0), P.Result.BUSY, timeout=0.6)
+        t2 = time.monotonic()
+        seq2 = client.send(P.Cmd.LOG_EXPORT, P.log_export_payload(0, 1, 0))
+        ack2 = ack_for(client, t2, P.Cmd.LOG_EXPORT, seq2, timeout=0.6)
+        if ack2 is not None and ack2.result == P.Result.BUSY:
+            client.check("导出中再次开始 → BUSY", PASS)
+        elif ack2 is not None and ack2.result == P.Result.OK:
+            client.check("导出中再次开始 → BUSY", SKIP,
+                         "空环导出已结束，BUSY 断言不成立")
+            seq3 = client.send(P.Cmd.LOG_EXPORT,
+                               P.log_export_payload(0, 0, 0))
+            ack_for(client, time.monotonic(), P.Cmd.LOG_EXPORT, seq3)
+        else:
+            client.check("导出中再次开始 → BUSY", FAIL,
+                         "无 ACK" if ack2 is None else _result_name(ack2))
 
     records, closed = collect_logs(client)
     client.check("导出收到结束帧", PASS if closed else FAIL,

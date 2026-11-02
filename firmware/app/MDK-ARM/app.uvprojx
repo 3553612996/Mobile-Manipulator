@@ -1163,6 +1163,11 @@
               <FileType>1</FileType>
               <FilePath>../01_APP/app_robot/app_user_init.c</FilePath>
             </File>
+            <File>
+              <FileName>app_motion_test.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\01_APP\app_robot\app_motion_test.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1184,5 +1189,14 @@
     </components>
     <files/>
   </RTE>
+
+  <LayerInfo>
+    <Layers>
+      <Layer>
+        <LayName>app</LayName>
+        <LayPrjMark>1</LayPrjMark>
+      </Layer>
+    </Layers>
+  </LayerInfo>
 
 </Project>

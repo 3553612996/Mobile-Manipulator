@@ -10,6 +10,7 @@
 | `app_robot/app_user_init.c` | 串口、服务、状态机、故障、命令表的初始化；常量任务表/队列表；循环创建任务 |
 | `app_robot/app_tasks.c` | `appComm` 与 `appCtrl` 两个任务的主循环，以及 PID 参数队列 |
 | `app_robot/app_handlers.c` | 协议命令处理表、按键手势、`SET_PARAM` 解析入队 |
+| `app_robot/app_motion_test.c` | 按键触发的直行 1 m / 原地 360° 标定动作，按里程计自停 |
 | `app_robot/app_state.c` | 主状态机，纯状态迁移，不做 I/O |
 | `app_robot/app_fault.c` | 故障锁存与仲裁、WARN/ERROR/FATAL 降级动作 |
 | `app_robot/app_report.c` | 周期上报调度、LED 状态 |
@@ -48,9 +49,9 @@ static const app_task_def_t s_task_table[] = {
 | 任务 | 优先级 | 周期 | 做什么 |
 | --- | --- | --- | --- |
 | `appComm` | HIGH | 10 ms 或 UART 事件唤醒 | `service_proto_process()`、命令回调、故障轮询、全部上报帧 |
-| `appCtrl` | ABOVE_NORMAL | 10 ms | 按键、PID 参数出队、`service_chassis_apply()`（超时停车 + 四轮速度 PID）、里程计、蜂鸣器 |
+| `appCtrl` | ABOVE_NORMAL | 10 ms | 按键、PID 参数出队、`service_chassis_apply()`（超时停车 + 四轮速度 PID）、里程计、按键标定动作、蜂鸣器 |
 
-**只有 `appComm` 发送串口数据**。控制任务要上报时（例如按键长按急停）置一个 pending 标志，由通信任务变成事件帧，避免两个任务同时调用阻塞发送。
+**只有 `appComm` 发送串口数据**。控制任务要上报时（例如普通模式的按键长按急停）置一个 pending 标志，由通信任务变成事件帧，避免两个任务同时调用阻塞发送。
 
 ## 队列表
 
@@ -154,10 +155,21 @@ INIT ──ready──► IDLE ◄──SET_ENABLE(0)──► MANUAL
 
 ## 按键手势
 
-| 手势 | 动作 |
-| --- | --- |
-| 短按 | MANUAL 时在"前进 150 mm/s"与"停车"之间切换 |
-| 长按 1.5 s | 立即急停（不等松手）、蜂鸣 300 ms、通信任务上报 `0x0501` |
+由 `APP_MOTION_TEST_ENABLE` 选择：
+
+| 手势 | `=1`（默认，落地标定） | `=0`（普通遥控） |
+| --- | --- | --- |
+| 短按 | 直行 1000 mm 后停；运动中再短按立即停 | MANUAL 时在"前进 150 mm/s"与"停车"之间切换 |
+| 长按 1.5 s | 原地逆时针转 360° 后停；运动中再长按也停 | 立即急停（不等松手）、蜂鸣 300 ms、通信任务上报 `0x0501` |
+
+标定模式的 1 m / 360° 由 `APP_MOTION_TEST_STRAIGHT_MM`、`APP_MOTION_TEST_SPIN_CDEG` 决定，速度在 `app_robot_config.h` 里。测试会自己使能底盘，结束时只关闭自己打开的使能；如果底盘原本已被上位机使能，只停车、不改使能状态。
+
+注意事项：
+
+- 测试没有避障，按按键前清空直行 1.5 m、四周 0.6 m 的场地，并保证电源开关在手边。
+- 测试期间不要同时让上位机发速度：两边写的是同一个速度目标，会互相覆盖。用按键标定时把上位机断开或保持空闲。
+- 标定模式下长按不再是急停；协议 `ESTOP` 和断电仍然有效。正常使用时把 `APP_MOTION_TEST_ENABLE` 设回 `0`。
+- 停车判据是**上报的**里程计，不是卷尺。`counts_per_mm` 未标定时，车实际走的距离/角度会和 1 m / 360° 有固定比例偏差；用卷尺量出实际值后，再按 `docs/nodes/m3/test-report.md` 的比例方法修正。
 
 ## 上报节奏
 
@@ -177,7 +189,7 @@ INIT ──ready──► IDLE ◄──SET_ENABLE(0)──► MANUAL
 
 `app_robot_config.h` 里带 `TODO(measure)` 的数字必须上车实测。它们只是**出厂默认值**：主机可以用 `SET_PARAM` + `PARAM_SAVE` 把实测结果写进标定区，上电时保存值优先。
 
-- `APP_CHASSIS_HALF_LENGTH_MM` / `APP_CHASSIS_HALF_WIDTH_MM`：影响旋转解算与里程计航向；
+- `APP_CHASSIS_WHEELBASE_MM` / `APP_CHASSIS_TRACK_MM`：2026-11-02 实测 170 / 165 mm，影响旋转解算与里程计航向。轴距是编译期常数（协议没有 setter），轮距可用 `SET_PARAM 0x01` 覆盖；旧标定 blob 里的 300 mm 轴距（以及配套的 240 mm 轮距默认值）会在加载时一次性迁到 170 / 165 mm；
 - `APP_CHASSIS_COUNTS_PER_MM_X1000`：按 13 线 × 4 倍频 × 90 减速比 / (π × 60 mm) = 24828 计算，轮径变了要重算（运行时写 `0x02` 即可，固件用同一个 4680 counts/rev 常数）；
 - `APP_CHASSIS_MAX_WHEEL_MM_S`：轮速目标上限；`counts_per_mm_x1000 = 0` 时也是开环回退的满量程；
 - `APP_CHASSIS_LEFT/RIGHT_PID_*`：速度环启动增益，**不是标定结果**。轮胎未装、负载未知，先用 `tools/bench/wheel_tune.py` 在台架上整定，数据记到 `docs/bench/pid-tuning.md`，再把选定值回填这里。

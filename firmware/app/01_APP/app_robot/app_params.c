@@ -206,8 +206,8 @@ static void s_reset_calib(void)
 {
     uint8_t wheel;
 
-    s_params.wheelbase_mm = 2 * (int32_t)APP_CHASSIS_HALF_LENGTH_MM;
-    s_params.track_mm = 2 * (int32_t)APP_CHASSIS_HALF_WIDTH_MM;
+    s_params.wheelbase_mm = APP_CHASSIS_WHEELBASE_MM;
+    s_params.track_mm = APP_CHASSIS_TRACK_MM;
     s_params.wheel_diameter_x10_mm =
         (int32_t)APP_CHASSIS_WHEEL_DIAMETER_MM * 10;
 
@@ -891,6 +891,21 @@ static platform_bool_t s_parse_calib(const uint8_t *data, uint16_t length,
             {
                 return PLATFORM_FALSE;
             }
+        }
+    }
+
+    /*
+     * The wheelbase has never had a protocol setter: the only values a blob
+     * can hold are compile-time defaults. 300 mm is the old drawing
+     * placeholder; 185 mm is the interim default from before the 2026-11-02
+     * tape measurement. Migrate both to the measured 170 mm. The track width
+     * *is* settable (0x01), so only replace the old 240 mm default when the
+     * blob is one of those legacy records; a host-calibrated value stays.
+     */
+    if ((wheelbase == (2 * 150)) || (wheelbase == 185)) {
+        wheelbase = APP_CHASSIS_WHEELBASE_MM;
+        if (track == (2 * 120)) {
+            track = APP_CHASSIS_TRACK_MM;
         }
     }
 

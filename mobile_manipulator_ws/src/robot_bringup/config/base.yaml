@@ -4,9 +4,9 @@ base_bridge:
     port: "/dev/robot_stm32"
     baud: 115200
 
-    # 必须与固件 SET_PARAM 0x01（轮距，默认 240 mm）的标定值一致。
+    # 必须与固件 SET_PARAM 0x01（轮距，默认 165 mm）的标定值一致。
     # v1 没有 GET_PARAM，固件里的值读不回来，改标定后要人工同步这里。
-    wheel_separation_m: 0.24
+    wheel_separation_m: 0.165
 
     # SET_VELOCITY 固定 20 ms 一帧。即使 /cmd_vel 不变也要持续发：
     # 固件 200 ms 收不到速度帧会主动停车并锁存 0x0202。

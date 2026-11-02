@@ -21,11 +21,11 @@
   <xacro:property name="ground_clearance" value="0.040"/>
 
   <!-- ===================== 轮系（米） ===================== -->
-  <!-- wheel_separation 必须等于固件 SET_PARAM 0x01 的轮距（默认 240 mm），
+  <!-- 2026-11-02 实测：轮距（左右轮心距）165 mm、轴距（前后轴心距）170 mm。
+       wheel_separation 必须等于固件 SET_PARAM 0x01 的轮距（默认 165 mm），
        否则 /odom 的 pose 与 twist 会对不上（见 base.yaml 的说明）。 -->
-  <xacro:property name="wheel_separation" value="0.240"/>
-  <!-- wheelbase 待实测：前后轮轴心距。 -->
-  <xacro:property name="wheelbase"        value="0.185"/>
+  <xacro:property name="wheel_separation" value="0.165"/>
+  <xacro:property name="wheelbase"        value="0.170"/>
   <xacro:property name="wheel_radius"     value="0.030"/>
   <xacro:property name="wheel_width"      value="0.035"/>
 

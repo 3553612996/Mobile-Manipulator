@@ -14,12 +14,13 @@
  * the services. The services validate against these limits; they never guess
  * geometry.
  *
- * TODO(measure): half_length / half_width / counts_per_mm / PID gains. The
- * geometry values come from the C25 V2.4 drawing and a 60 mm mecanum wheel
- * with the 1:90 gearbox; a ruler test on the assembled robot is still
- * required. Odometry scales linearly with counts_per_mm, so a wrong value
- * shows up as a constant distance error, not as drift. The PID gains are only
- * a conservative starting point until the tyres are fitted.
+ * TODO(measure): counts_per_mm / PID gains. The wheelbase and track below are
+ * the assembled-robot measurements (170 mm between axle centres, 165 mm
+ * between wheel centres), not the C25 V2.4 drawing values. counts_per_mm still
+ * comes from the nominal 60 mm tyre and needs a rolling test on the floor;
+ * odometry scales linearly with it, so a wrong value shows up as a constant
+ * distance error, not as drift. The PID gains are only a conservative
+ * starting point until the tyres are fitted.
  *
  * @version V1.1 2026-10-29
  *
@@ -43,8 +44,19 @@
 
 /* ------------------------------- Geometry ------------------------------- */
 
-#define APP_CHASSIS_HALF_LENGTH_MM      ((int16_t)150)
-#define APP_CHASSIS_HALF_WIDTH_MM       ((int16_t)120)
+/*
+ * Measured on the assembled chassis (2026-11-02): 170 mm between the front
+ * and rear axle centres, 165 mm between the left and right wheel centres. The
+ * service uses half lengths, but the stored calibration keeps full
+ * millimetres, so define the full values and derive the halves here.
+ *
+ * The old C25 V2.4 drawing said 150 mm half-length (300 mm wheelbase); that
+ * was never the built robot and made every in-place rotation ~60 % fast.
+ */
+#define APP_CHASSIS_WHEELBASE_MM        ((int32_t)170)
+#define APP_CHASSIS_TRACK_MM            ((int32_t)165)
+#define APP_CHASSIS_HALF_LENGTH_MM      ((int16_t)(APP_CHASSIS_WHEELBASE_MM / 2))
+#define APP_CHASSIS_HALF_WIDTH_MM       ((int16_t)(APP_CHASSIS_TRACK_MM / 2))
 
 /*
  * counts_per_mm * 1000:
@@ -147,6 +159,26 @@
 #define APP_KEY_LONG_PRESS_MS           ((uint32_t)1500u)
 #define APP_KEY_FORWARD_MM_S            ((uint16_t)150u)
 #define APP_KEY_BEEP_MS                 ((uint32_t)300u)
+
+/*
+ * On-board key motion test for untethered floor calibration:
+ *   short press       drive forward APP_MOTION_TEST_STRAIGHT_MM, then stop
+ *   long press (1.5 s) spin APP_MOTION_TEST_SPIN_CDEG in place, then stop
+ *   short press again  abort the move and stop
+ *
+ * The test enables the chassis itself, integrates the chassis odometry and
+ * stops on the reported distance/angle, so no laptop or host is needed. It
+ * has no obstacle detection: clear the floor before pressing the key.
+ *
+ * Set to 0 to restore the normal gestures (short press toggles 150 mm/s
+ * forward, long press latches the emergency stop). In test mode the long
+ * press no longer e-stops; the protocol ESTOP and the power switch remain.
+ */
+#define APP_MOTION_TEST_ENABLE          1
+#define APP_MOTION_TEST_STRAIGHT_MM     ((int32_t)1000)
+#define APP_MOTION_TEST_STRAIGHT_MM_S   ((int16_t)150)
+#define APP_MOTION_TEST_SPIN_CDEG       ((int32_t)36000)
+#define APP_MOTION_TEST_SPIN_MRAD_S     ((int16_t)600)
 
 /* -------------------------------- Arm ----------------------------------- */
 

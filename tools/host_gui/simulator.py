@@ -35,7 +35,7 @@ WHEEL_SPEED_PERIOD_S = 0.020
 ARM_PERIOD_S = 0.050
 STATUS_PERIOD_S = 0.100
 HEARTBEAT_PERIOD_S = 0.100
-TRACK_WIDTH_MM = 200.0
+TRACK_WIDTH_MM = 165.0
 JOINT_RATE = 6000.0        # centi-degrees per second
 GRIPPER_RATE = 500.0       # position units per second
 
@@ -46,7 +46,7 @@ LOG_EXPORT_PERIOD_S = 0.050        # the firmware's 20 Hz ceiling
 CRASH_CHUNK_BYTES = 32
 DEFAULT_LIMITS = {"timeout_ms": 200, "max_linear": 500, "max_angular": 1500}
 DEFAULT_CALIB = {
-    "wheel_base": 240,
+    "wheel_base": 165,
     "wheel_diameter": 60,
     "counts": [24828] * 4,
     "duty_fwd": [75, 67, 82, 80],
@@ -604,7 +604,7 @@ class SimulatorLink(QObject):
     def _seed_logs():
         rows = (
             (12, 1, 6, "存储子系统就绪：W25Q64 8 MiB，分区表有效"),
-            (12, 1, 1, "底盘标定载入：轮距 240 mm，编码器 24828 counts/m"),
+            (12, 1, 1, "底盘标定载入：轮距 165 mm，编码器 24828 counts/m"),
             (13, 1, 2, "协议 v1 链路建立，ACK 超时 200 ms"),
             (14, 1, 5, "急停回路自检通过"),
             (15, 1, 4, "电池电压 11.8 V，正常"),
