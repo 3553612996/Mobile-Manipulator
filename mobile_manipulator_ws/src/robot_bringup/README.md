@@ -58,13 +58,67 @@ map ──(SLAM / AMCL)── odom ──(base_bridge)── base_link
 | --- | --- | --- |
 | `launch/base.launch.py` | 底盘桥接、串口参数、`robot_state_publisher` | M4 |
 | `launch/lidar.launch.py` | X2 雷达驱动（`/scan`、`/lidar/points`） | M4 |
-| `launch/slam.launch.py` | 激光建图与定位 | M4 |
+| `launch/mapping.launch.py` | 底盘 + 雷达 + SLAM Toolbox + RViz，本机串口建图 | M4 |
+| `launch/mapping_external.launch.py` | 订阅主机 `/lidar/raw`、`/stm32/raw` 建图 | M4 测试 |
+| `launch/slam.launch.py` | 激光建图与定位（后续拆分/定位模式） | M4 |
 | `launch/nav2.launch.py` | Nav2 导航 | M5 |
 | `launch/vision.launch.py` | 相机与视觉推理 | M7 |
 | `launch/task.launch.py` | 任务状态机 | M8 |
 | `launch/robot.launch.py` | 整机启动编排 | M8 |
 
 启动顺序按 `docs/architecture/overview.md`：串口桥接 → 定位/建图 → 导航 → 视觉 → 任务。
+
+## 轮式 + 雷达建图（M4）
+
+```bash
+# 底盘和雷达分别占一个串口；PC 上按实际设备改
+ros2 launch robot_bringup mapping.launch.py \
+    base_port:=/dev/robot_stm32 \
+    lidar_port:=/dev/ttyUSB0
+
+# 另一个终端遥控
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+# 走完一圈后保存地图
+ros2 run nav2_map_server map_saver_cli -f maps/room1
+```
+
+建图链路：
+
+```text
+/scan (laser_link) ─┐
+/odom + TF odom→base_link (base_bridge) ─┴─► slam_toolbox
+                                              ├─► /map
+                                              └─► TF map→odom
+```
+
+这一版**不接 IMU/EKF**，`odom→base_link` 只由 `base_bridge` 发布。以后加 EKF 时，把 `base.yaml` 的 `publish_tf` 设为 `false`，由 EKF 接替。参数在 `config/slam_toolbox.yaml`，RViz 布局在 `config/mapping.rviz`。
+
+> 底盘和雷达如果都是 CH340，VID/PID 相同，`/dev/ttyUSB*` 可能互换；用 `config/udev/` 按物理口/序列号固定，或每次启动确认端口。
+
+## 主机原始数据建图（当前 PC 测试）
+
+主机上的 `/raw_serial_bridge` 节点把两个串口原始字节通过桥接网络转发到虚拟机：
+
+| 主机 topic | 类型 | 内容 |
+| --- | --- | --- |
+| `/lidar/raw` | `std_msgs/msg/UInt8MultiArray` | X2 原始包流 `AA 55 ...` |
+| `/stm32/raw` | `std_msgs/msg/UInt8MultiArray` | STM32 协议原始帧 `AA 55 ...` |
+
+虚拟机里：
+
+```bash
+ros2 launch robot_bringup mapping_external.launch.py
+# 默认 lidar_raw_topic:=/lidar/raw chassis_raw_topic:=/stm32/raw rviz:=true
+
+# 或手动指定
+ros2 launch robot_bringup mapping_external.launch.py \
+  lidar_raw_topic:=/lidar/raw \
+  chassis_raw_topic:=/stm32/raw \
+  rviz:=true
+```
+
+`robot_raw_bridge` 的两个节点把原始字节还原成 `/scan`、`/odom`、`TF odom→base_link`、`/robot_status`，然后交给 `slam_toolbox`。这个包是测试用，最终上车仍用 `base_bridge` + `robot_lidar` 直接读串口。
 
 ## 约定
 
