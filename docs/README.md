@@ -18,6 +18,7 @@ docs/
 | [architecture/protocol.md](architecture/protocol.md) | 串口协议 v1：帧格式、命令字、CRC、超时、故障码、测试向量 |
 | [architecture/robot-base-design.md](architecture/robot-base-design.md) | 底盘串口桥接：分层、线程与时序、接口、设计决策、实测记录 |
 | [architecture/flash-layout.md](architecture/flash-layout.md) | 外部 Flash 布局：参数/标定/镜像/故障/日志区域、记录格式、掉电安全、寿命预算 |
+| [architecture/detailed-design.md](architecture/detailed-design.md) | 详细设计：需求到验证的完整链路，覆盖 STM32 固件与 ROS 2 上位机的模块、时序、异常与测试 |
 
 ## 工程规范
 
