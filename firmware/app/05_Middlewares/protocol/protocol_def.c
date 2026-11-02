@@ -27,6 +27,12 @@
  * print "SET_ENABLE" without a second lookup table in the service layer.
  * SET_ARM_JOINTS and SET_VELOCITY deliberately do not require an ACK: a lost
  * joint frame is corrected by the next one and velocity has the 200 ms stop.
+ *
+ * The storage commands 0x08..0x0D are listed here from the moment the app
+ * layer registers handlers for them; until then they were absent so the
+ * firmware answered 0x03 (unknown), as protocol.md promised. Their ACK means
+ * "accepted", not "written": the erase happens in the storage task and the
+ * outcome arrives in REPORT_STORAGE.
  */
 static const protocol_cmd_info_t s_cmd_table[] =
 {
@@ -43,7 +49,19 @@ static const protocol_cmd_info_t s_cmd_table[] =
     { PROTOCOL_CMD_ESTOP,          PROTOCOL_LEN_ESTOP,
       PLATFORM_TRUE,  "ESTOP" },
     { PROTOCOL_CMD_CLEAR_FAULT,    PROTOCOL_LEN_CLEAR_FAULT,
-      PLATFORM_TRUE,  "CLEAR_FAULT" }
+      PLATFORM_TRUE,  "CLEAR_FAULT" },
+    { PROTOCOL_CMD_PARAM_SAVE,     PROTOCOL_LEN_PARAM_SAVE,
+      PLATFORM_TRUE,  "PARAM_SAVE" },
+    { PROTOCOL_CMD_PARAM_RESET,    PROTOCOL_LEN_PARAM_RESET,
+      PLATFORM_TRUE,  "PARAM_RESET" },
+    { PROTOCOL_CMD_STORAGE_QUERY,  PROTOCOL_LEN_STORAGE_QUERY,
+      PLATFORM_TRUE,  "STORAGE_QUERY" },
+    { PROTOCOL_CMD_LOG_EXPORT,     PROTOCOL_LEN_LOG_EXPORT,
+      PLATFORM_TRUE,  "LOG_EXPORT" },
+    { PROTOCOL_CMD_CRASH_READ,     PROTOCOL_LEN_CRASH_READ,
+      PLATFORM_TRUE,  "CRASH_READ" },
+    { PROTOCOL_CMD_LOG_CLEAR,      PROTOCOL_LEN_LOG_CLEAR,
+      PLATFORM_TRUE,  "LOG_CLEAR" }
 };
 
 #define PROTOCOL_CMD_TABLE_SIZE \
@@ -91,6 +109,8 @@ protocol_severity_t protocol_fault_severity(uint16_t code)
         case PROTOCOL_FAULT_CRC_LIMIT:
         case PROTOCOL_FAULT_BATTERY_LOW:
         case PROTOCOL_FAULT_OVERTEMP:
+        case PROTOCOL_FAULT_PARAM_INVALID:
+        case PROTOCOL_FAULT_CALIB_INVALID:
             return PROTOCOL_SEVERITY_WARN;
 
         case PROTOCOL_FAULT_OVERCURRENT:
@@ -98,6 +118,8 @@ protocol_severity_t protocol_fault_severity(uint16_t code)
         case PROTOCOL_FAULT_JOINT_LIMIT:
         case PROTOCOL_FAULT_JOINT_STALL:
         case PROTOCOL_FAULT_TRAJECTORY:
+        case PROTOCOL_FAULT_STORAGE_WRITE:
+        case PROTOCOL_FAULT_PARTITION:
             return PROTOCOL_SEVERITY_ERROR;
 
         case PROTOCOL_FAULT_COMM_TIMEOUT:

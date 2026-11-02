@@ -20,7 +20,7 @@
  *   - the mecanum inverse kinematics,
  *   - target validation and the 200 ms command timeout,
  *   - enable/disable and the latched emergency stop,
- *   - open-loop duty application (the speed PID will replace only this part),
+ *   - four independent wheel-speed loops (PID) on the encoder feedback,
  *   - dead-reckoning odometry from the four encoders.
  *
  * Coordinate frame (REP-103 style, flat floor):
@@ -30,7 +30,7 @@
  * Time is injected (now_ms from the caller's millisecond clock) so the timeout
  * logic is testable on a PC and has no hidden dependency on the scheduler.
  *
- * @version V1.0 2026-10-28
+ * @version V1.1 2026-10-29
  *
  * @note 1 tab == 4 spaces.
  *
@@ -53,7 +53,29 @@
 #define SERVICE_CHASSIS_WHEEL_RL        (2u)
 #define SERVICE_CHASSIS_WHEEL_RR        (3u)
 
+/*
+ * Bench open-loop test. The host writes a duty per wheel and must refresh it
+ * within the timeout; a wheel whose value goes stale coasts. The cap keeps a
+ * scripting mistake from commanding full torque on a wheel that is still on
+ * the floor: 40 % is well above the dead zone of these geared motors.
+ */
+#define SERVICE_CHASSIS_TEST_DUTY_MAX          ((int16_t)400)
+#define SERVICE_CHASSIS_TEST_DUTY_TIMEOUT_MS   ((uint32_t)300u)
+
+/* Reliable start duty upper bound, permille. 1000 would be full torque. */
+#define SERVICE_CHASSIS_START_DUTY_MAX         ((int16_t)1000)
+
+/* Sanity bound for half wheelbase / half track, millimetres. */
+#define SERVICE_CHASSIS_GEOMETRY_MAX_MM        ((int16_t)1000)
+
 //******************************** Declaring ********************************//
+
+typedef enum
+{
+    SERVICE_CHASSIS_PID_KP = 0,
+    SERVICE_CHASSIS_PID_KI,
+    SERVICE_CHASSIS_PID_KD
+} service_chassis_pid_gain_t;
 
 typedef struct
 {
@@ -67,10 +89,25 @@ typedef struct
     int16_t             max_vy_mm_s;
     int16_t             max_wz_mrad_s;
 
-    /* Wheel speed that corresponds to +-1000 permille (open-loop only). */
+    /*
+     * Wheel-speed limit. It caps each wheel target and is also the full scale
+     * of the open-loop fallback used when counts_per_mm_x1000 is 0.
+     */
     int16_t             max_wheel_mm_s;
 
-    /* Encoder counts per millimetre, multiplied by 1000. 0 disables odometry. */
+    /*
+     * Per-wheel speed-loop gains. They are arrays so one wheel can be tuned
+     * without changing the others; the application normally starts with the
+     * same values for the left and right pairs. Gains must be >= 0.
+     */
+    float_t             pid_kp[SERVICE_CHASSIS_WHEEL_COUNT];
+    float_t             pid_ki[SERVICE_CHASSIS_WHEEL_COUNT];
+    float_t             pid_kd[SERVICE_CHASSIS_WHEEL_COUNT];
+
+    /*
+     * Encoder counts per millimetre, multiplied by 1000. 0 disables odometry
+     * and makes the chassis fall back to open-loop duty.
+     */
     int32_t             counts_per_mm_x1000;
 
     uint32_t            cmd_timeout_ms;         /* 200 ms per protocol. */
@@ -86,6 +123,75 @@ typedef struct
 } service_chassis_odometry_t;
 
 platform_err_t service_chassis_init(const service_chassis_cfg_t *cfg);
+
+/*
+ * Change one wheel's gain at runtime. Only the control task (the owner of
+ * apply()) may call this: it re-initialises that wheel's PID and re-reads its
+ * encoder, so a gain change never inherits an integral from the old tuning.
+ * The value must be finite and in [0, SERVICE_CHASSIS_PID_GAIN_LIMIT].
+ */
+platform_err_t service_chassis_set_pid_gain(uint8_t wheel,
+                                            service_chassis_pid_gain_t gain,
+                                            float_t value);
+
+/* Read back one wheel's gain. Returns PLATFORM_ERR_PARAM when out of range. */
+platform_err_t service_chassis_get_pid_gain(uint8_t wheel,
+                                            service_chassis_pid_gain_t gain,
+                                            float_t *value);
+
+/*
+ * Runtime calibration. These change what the next control tick uses, so the
+ * application must call them from the control task (the owner of apply()), the
+ * same rule as service_chassis_set_pid_gain(). Protocol.md requires the
+ * chassis to be disabled while a calibration value is written.
+ *
+ * Geometry: half the wheelbase and half the track, in millimetres. The sum
+ * feeds the mecanum inverse kinematics and the yaw term of the odometry.
+ */
+platform_err_t service_chassis_set_geometry(int16_t half_length_mm,
+                                            int16_t half_width_mm);
+
+/*
+ * Encoder scale implied by a wheel diameter: counts_per_rev / (pi * d), x1000
+ * and rounded half away from zero. Wheel geometry is this service's business,
+ * so the application derives the scale from the calibrated diameter here
+ * instead of keeping a second copy of the formula. counts_per_rev is the
+ * hardware constant (quadrature counts per wheel revolution, gearbox
+ * included); a zero diameter returns 0 and stores nothing.
+ */
+int32_t service_chassis_counts_per_mm_x1000(int32_t counts_per_rev,
+                                            int32_t diameter_mm);
+
+/*
+ * Per-wheel encoder scale and direction. counts_per_mm_x1000 is the x1000
+ * integer the protocol uses; 0 restores the common cfg value. dir is +1 or
+ * -1: a motor mounted mirrored gets -1, and every count delta is negated
+ * before it reaches the speed loop and the odometry. Passing 0 for dir is a
+ * parameter error so a bad value is never stored silently.
+ */
+platform_err_t service_chassis_set_wheel_scale(uint8_t wheel,
+                                               int32_t counts_per_mm_x1000,
+                                               int8_t dir);
+
+/*
+ * Reliable start duty per wheel and direction, permille. While the wheel is
+ * still at rest and the target is non-zero, the speed loop output is lifted to
+ * this value in the commanded direction. 0 disables the compensation; the
+ * default is 0 so an uncalibrated board behaves exactly as before.
+ */
+platform_err_t service_chassis_set_start_duty(uint8_t wheel,
+                                              int16_t fwd_permille,
+                                              int16_t rev_permille);
+
+/*
+ * Command timeout and velocity limits. Unlike the gain/geometry setters these
+ * are plain configuration reads, but they are still applied from the control
+ * task so there is one writer for the whole chassis state.
+ */
+platform_err_t service_chassis_set_limits(uint16_t cmd_timeout_ms,
+                                          int16_t max_vx_mm_s,
+                                          int16_t max_vy_mm_s,
+                                          int16_t max_wz_mrad_s);
 
 /* Enabling is refused while the emergency stop is latched. */
 platform_err_t service_chassis_enable(platform_bool_t enable, uint32_t now_ms);
@@ -116,16 +222,50 @@ void service_chassis_emergency_stop(void);
 platform_err_t service_chassis_clear_estop(void);
 
 /*
- * Safety watchdog. Call at the control period (10 ms). Stops the wheels when
- * the last accepted velocity frame is older than cmd_timeout_ms.
+ * One control tick: run the safety watchdog, update the four speed loops from
+ * the encoders and write the motor duty. Call at the control period (10 ms).
+ * dt_ms is the interval since the previous call and must be non-zero.
  * Returns PLATFORM_TRUE on the tick the timeout becomes active.
+ *
+ * While the command timeout is active the loops are held at zero and the
+ * integral is kept reset; a fresh valid frame restarts them from a new
+ * encoder baseline.
  */
-platform_bool_t service_chassis_apply(uint32_t now_ms);
+platform_bool_t service_chassis_apply(uint32_t now_ms, uint32_t dt_ms);
 
 /* Integrate one encoder interval. Call at the odometry period (10 ms). */
 void service_chassis_update_odometry(uint32_t dt_ms);
 
 void service_chassis_get_odometry(service_chassis_odometry_t *out);
+
+/*
+ * Last measured per-wheel speed in FL, FR, RL, RR order. Valid after apply();
+ * all zeros when speed feedback is unavailable (open-loop fallback).
+ */
+void service_chassis_get_wheel_speeds(
+                    int16_t out_mm_s[SERVICE_CHASSIS_WHEEL_COUNT]);
+
+/*
+ * Duty the control tick last wrote to each motor, permille of full scale,
+ * FL/FR/RL/RR. All zeros when the chassis is disabled.
+ */
+void service_chassis_get_wheel_duty(
+                    int16_t out_permille[SERVICE_CHASSIS_WHEEL_COUNT]);
+
+/*
+ * Bench-only open loop: drive one wheel at a fixed duty, bypassing the speed
+ * loop. Requires an enabled, non-estopped chassis; |permille| is capped at
+ * SERVICE_CHASSIS_TEST_DUTY_MAX and each write expires after
+ * SERVICE_CHASSIS_TEST_DUTY_TIMEOUT_MS, so the host must keep refreshing it.
+ * Any velocity command, stop, disable or emergency stop leaves test mode.
+ * Call from the control task, the owner of the PID state.
+ */
+platform_err_t service_chassis_set_test_duty(uint8_t wheel,
+                                             int16_t permille,
+                                             uint32_t now_ms);
+
+/* TRUE while the open-loop test owns the motors. */
+platform_bool_t service_chassis_is_test_mode(void);
 
 /* TRUE while the command timeout is active (since the last valid frame). */
 platform_bool_t service_chassis_cmd_timed_out(void);

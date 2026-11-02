@@ -11,6 +11,7 @@
  * - impl_bsp/impl_bsp_led.h
  * - impl_bsp/impl_bsp_buzzer.h
  * - impl_bsp/impl_bsp_battery.h
+ * - impl_bsp/impl_bsp_flash.h
  *
  * @author wuying <3553612993@qq.com>
  *
@@ -25,6 +26,7 @@
  *   servos  = PC13, PC14, PC15, PC0, PC1, PC2 on the TIM7 soft-PWM chain
  *   key PB2, LED PC4 (active low), buzzer PC5 (active high)
  *   battery divider x11 on ADC1_IN13 / PC3
+ *   W25Q64 on SPI2: SCK PB13, MISO PB14, MOSI PB15, CS PB12 (GPIO)
  *
  * For every wheel the "reverse" input is the one the vendor holds at full
  * compare; the "forward" input is chopped (see bsp_motor_dual_pwm.h).
@@ -49,6 +51,7 @@
 #include "impl_bsp/impl_bsp_led.h"
 #include "impl_bsp/impl_bsp_buzzer.h"
 #include "impl_bsp/impl_bsp_battery.h"
+#include "impl_bsp/impl_bsp_flash.h"
 
 #include "bsp_motor_dual_pwm.h"
 #include "bsp_servo_softpwm.h"
@@ -56,6 +59,7 @@
 #include "bsp_led_gpio.h"
 #include "bsp_buzzer_gpio.h"
 #include "bsp_battery_adc.h"
+#include "bsp_flash_w25q64.h"
 
 //******************************** Defines **********************************//
 
@@ -87,6 +91,7 @@ static bsp_key_gpio_t       s_key;
 static bsp_led_gpio_t       s_led;
 static bsp_buzzer_gpio_t    s_buzzer;
 static bsp_battery_adc_t    s_battery;
+static bsp_flash_w25q64_t   s_flash;
 
 /*
  * pwm_forward is the bridge input the vendor chops for a positive speed, i.e.
@@ -219,6 +224,17 @@ static platform_err_t board_register_battery(void)
     return platform_battery_register(&impl_bsp_battery_ops, &s_battery);
 }
 
+static platform_err_t board_register_flash(void)
+{
+    s_flash.cfg.bus                 = PLATFORM_SPI_BUS_0;
+    s_flash.cfg.cs_pin.port         = BOARD_GPIO_PORT_B;
+    s_flash.cfg.cs_pin.pin          = 12u;
+    s_flash.cfg.max_frequency_hz    = BSP_FLASH_W25Q64_DEFAULT_HZ;
+    s_flash.cfg.transfer_timeout_ms = 100u;
+
+    return platform_flash_register(&impl_bsp_flash_ops, &s_flash);
+}
+
 platform_err_t board_init(void)
 {
     platform_err_t err;
@@ -247,6 +263,20 @@ platform_err_t board_init(void)
     {
         return err;
     }
+
+    err = board_register_flash();
+    if (PLATFORM_IS_ERR(err))
+    {
+        return err;
+    }
+
+    /*
+     * The flash is a peripheral, not a motion device: a missing or dead chip
+     * must not keep the chassis from booting. A failure here leaves the device
+     * uninitialized; platform_flash_get_info() then reports NOT_INITIALIZED and
+     * the storage service turns that into fault 0x0601.
+     */
+    (void)platform_flash_init();
 
     /* Motors come up initialized but disabled: the control task enables them. */
     for (i = 0u; i < BOARD_MOTOR_COUNT; i++)

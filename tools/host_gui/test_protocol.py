@@ -142,9 +142,200 @@ class AckAndReportTests(unittest.TestCase):
         self.assertEqual(arm["gripper_pos"], 850)
         self.assertEqual(arm["gripper_state"], 1)
 
+    def test_wheel_speed_round_trip(self):
+        import struct
+        raw = p.build_frame(p.Report.WHEEL_SPEED, 4,
+                            struct.pack("<4h", 100, -200, 300, -400))
+        frame = p.FrameParser().feed(raw)[0]
+        self.assertEqual(p.decode_wheel_speed(frame.payload),
+                         {"fl_mm_s": 100, "fr_mm_s": -200,
+                          "rl_mm_s": 300, "rr_mm_s": -400})
+
+    def test_wheel_duty_round_trip(self):
+        import struct
+        raw = p.build_frame(p.Report.WHEEL_DUTY, 5,
+                            struct.pack("<4h", 400, -400, 0, 25))
+        frame = p.FrameParser().feed(raw)[0]
+        self.assertEqual(p.decode_wheel_duty(frame.payload),
+                         {"fl_permille": 400, "fr_permille": -400,
+                          "rl_permille": 0, "rr_permille": 25})
+
+    def test_test_duty_ids_are_named(self):
+        # 0x30..0x33 must not collide with the gain ids 0x20..0x2B.
+        self.assertEqual(p.TEST_DUTY_IDS, (0x30, 0x31, 0x32, 0x33))
+        for param_id in p.TEST_DUTY_IDS:
+            self.assertIn(param_id, p.PARAM_NAMES)
+            self.assertFalse(any(param_id in ids for ids in p.PID_PARAM_IDS))
+
+    def test_pid_param_ids_are_named(self):
+        for wheel, ids in enumerate(p.PID_PARAM_IDS):
+            for gain, param_id in enumerate(ids):
+                self.assertEqual(param_id, 0x20 + wheel * 3 + gain)
+                self.assertIn(param_id, p.PARAM_NAMES)
+
+    def test_set_param_payload(self):
+        payload = p.set_param_payload(0x2B, 1500)
+        self.assertEqual(len(payload), 5)
+        self.assertEqual(payload[0], 0x2B)
+        import struct
+        self.assertEqual(struct.unpack("<i", payload[1:])[0], 1500)
+
     def test_short_report_is_rejected(self):
         self.assertIsNone(p.decode_status(b"\x01\x02"))
         self.assertIsNone(p.decode_odom(b""))
+        self.assertIsNone(p.decode_wheel_speed(b"\x00" * 7))
+        self.assertIsNone(p.decode_wheel_duty(b"\x00" * 9))
+        self.assertIsNone(p.decode_storage(b"\x00" * 23))
+        self.assertIsNone(p.decode_log(b"\x00" * 14))
+        self.assertIsNone(p.decode_crash(b"\x00" * 6))
+
+
+class StorageTests(unittest.TestCase):
+    def test_param_save_vector(self):
+        frame = p.build_frame(p.Cmd.PARAM_SAVE, 4, p.param_save_payload(0))
+        self.assertEqual(frame, p.VECTOR_PARAM_SAVE)
+
+    def test_storage_query_vector(self):
+        self.assertEqual(p.build_frame(p.Cmd.STORAGE_QUERY, 5),
+                         p.VECTOR_STORAGE_QUERY)
+
+    def test_log_export_vector(self):
+        frame = p.build_frame(p.Cmd.LOG_EXPORT, 6,
+                              p.log_export_payload(0, 1, 0))
+        self.assertEqual(frame, p.VECTOR_LOG_EXPORT)
+
+    def test_param_reset_requires_confirm(self):
+        self.assertEqual(p.param_reset_payload(1), bytes((1, 0xA5)))
+
+    def test_storage_round_trip(self):
+        import struct
+        raw = p.build_frame(p.Report.STORAGE, 7, struct.pack(
+            "<BBHHHIIII", 0x03, 1, 7, 3, 0, 42, 1000, 5, 99))
+        frame = p.FrameParser().feed(raw)[0]
+        st = p.decode_storage(frame.payload)
+        self.assertEqual(st["param_seq"], 7)
+        self.assertEqual(st["calib_seq"], 3)
+        self.assertEqual(st["boot_total"], 42)
+        self.assertFalse(st["dirty"])
+        self.assertTrue(st["param_valid"])
+        self.assertFalse(st["save_failed"])
+
+    def test_log_round_trip(self):
+        import struct
+        head = struct.pack("<BBBBIIHB", 0, 1, 6, 0x01, 123, 9, 0, 5)
+        raw = p.build_frame(p.Report.LOG, 8, head + b"hello")
+        frame = p.FrameParser().feed(raw)[0]
+        rec = p.decode_log(frame.payload)
+        self.assertEqual(rec["text"], "hello")
+        self.assertEqual(rec["seq"], 9)
+        self.assertTrue(rec["more"])
+        self.assertFalse(rec["end"])
+
+    def test_log_end_frame(self):
+        import struct
+        head = struct.pack("<BBBBIIHB", 0, 1, 6, 0x02, 124, 10, 0, 0)
+        rec = p.decode_log(head)
+        self.assertTrue(rec["end"])
+        self.assertEqual(rec["text"], "")
+
+    def test_crash_chunk_round_trip(self):
+        import struct
+        data = bytes(range(57))
+        head = struct.pack("<BBHHB", 2, 0x01, 0, 1024, 57)
+        rec = p.decode_crash(head + data)
+        self.assertEqual(rec["slot"], 2)
+        self.assertEqual(rec["offset"], 0)
+        self.assertEqual(rec["total_len"], 1024)
+        self.assertEqual(rec["data"], data)
+        self.assertTrue(rec["more"])
+
+    def test_calib_param_ids_are_named(self):
+        # Deadzone, encoder scale and wheel direction belong to calibration.
+        self.assertIn(0x01, p.CALIB_PARAM_IDS)
+        self.assertIn(0x02, p.CALIB_PARAM_IDS)
+        for param_id in range(0x50, 0x60):
+            self.assertIn(param_id, p.CALIB_PARAM_IDS)
+            self.assertIn(param_id, p.PARAM_NAMES)
+        self.assertNotIn(0x30, p.CALIB_PARAM_IDS)
+        self.assertIn(0x40, p.PARAM_NAMES)
+        self.assertIn(0x41, p.PARAM_NAMES)
+
+    def test_calib_groups_match_the_parameter_table(self):
+        self.assertEqual(p.GEOMETRY_IDS, {"wheel_base": 0x01,
+                                          "wheel_diameter": 0x02})
+        self.assertEqual(p.COUNTS_PER_MM_IDS, (0x50, 0x51, 0x52, 0x53))
+        self.assertEqual(p.DUTY_FWD_IDS, (0x54, 0x55, 0x56, 0x57))
+        self.assertEqual(p.DUTY_REV_IDS, (0x58, 0x59, 0x5A, 0x5B))
+        self.assertEqual(p.DIRECTION_IDS, (0x5C, 0x5D, 0x5E, 0x5F))
+        # Limits are parameter-region ids, not calibration.
+        for param_id in p.LIMIT_IDS.values():
+            self.assertNotIn(param_id, p.CALIB_PARAM_IDS)
+        self.assertEqual(p.LIMIT_IDS["timeout_ms"], 0x10)
+        self.assertEqual(p.LIMIT_IDS["max_linear"], 0x11)
+        self.assertEqual(p.LIMIT_IDS["max_angular"], 0x12)
+
+    def test_storage_flag_states_follow_bit_order(self):
+        st = p.decode_storage(bytes.fromhex(
+            "09 01 07 00 03 00 00 00 2A 00 00 00 E8 03 00 00 "
+            "05 00 00 00 63 00 00 00"))
+        states = p.storage_flag_states(st)
+        self.assertEqual([name for name, _ in states],
+                         list(p.STORAGE_FLAG_NAMES))
+        self.assertEqual([on for _, on in states],
+                         [True, False, False, True, False, False, False, False])
+        self.assertTrue(st["clean"])
+        self.assertTrue(st["save_failed"])
+
+
+class CrashAssemblerTests(unittest.TestCase):
+    @staticmethod
+    def _chunk(slot, offset, total, data, more=None):
+        return {"slot": slot, "offset": offset, "total_len": total,
+                "data": bytes(data),
+                "more": (offset + len(data) < total) if more is None else more}
+
+    def test_chunks_reassemble_to_one_record(self):
+        assembler = p.CrashAssembler()
+        data = bytes(range(100))
+        self.assertEqual(assembler.feed(self._chunk(3, 0, 100, data[0:40])),
+                         "start")
+        self.assertEqual(assembler.feed(self._chunk(3, 40, 100, data[40:80])),
+                         "chunk")
+        self.assertEqual(assembler.feed(self._chunk(3, 80, 100, data[80:])),
+                         "done")
+        self.assertTrue(assembler.complete)
+        self.assertEqual(assembler.record(), data)
+
+    def test_offset_gap_throws_the_partial_away(self):
+        assembler = p.CrashAssembler()
+        self.assertEqual(assembler.feed(self._chunk(1, 0, 100, b"A" * 40)),
+                         "start")
+        # 80 arrived without 40..79: stitching would hide a hole.
+        self.assertEqual(assembler.feed(self._chunk(1, 80, 100, b"C" * 20)),
+                         "gap")
+        self.assertEqual(assembler.offset, 0)
+        self.assertFalse(assembler.complete)
+
+    def test_slot_change_starts_over(self):
+        assembler = p.CrashAssembler()
+        assembler.feed(self._chunk(2, 0, 60, b"A" * 30))
+        self.assertEqual(assembler.feed(self._chunk(4, 0, 60, b"B" * 30)),
+                         "start")
+        self.assertEqual(assembler.slot, 4)
+        self.assertEqual(assembler.record(), b"B" * 30)
+
+    def test_inconsistent_lengths_are_rejected(self):
+        assembler = p.CrashAssembler()
+        self.assertEqual(assembler.feed(self._chunk(0, 0, 10, b"")), "bad")
+        self.assertEqual(assembler.feed(self._chunk(0, 0, 0, b"abcd")), "bad")
+        self.assertEqual(assembler.feed(self._chunk(0, 8, 10, b"abcd")), "bad")
+
+    def test_reset_drops_the_buffer(self):
+        assembler = p.CrashAssembler()
+        assembler.feed(self._chunk(5, 0, 50, b"A" * 25))
+        assembler.reset()
+        self.assertEqual(assembler.offset, 0)
+        self.assertIsNone(assembler.slot)
 
 
 if __name__ == "__main__":

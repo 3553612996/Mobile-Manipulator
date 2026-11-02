@@ -329,16 +329,14 @@ def run_auto(client: Client, move: bool, simulation: bool) -> None:
                      f"fault={_fault_name(boot['fault'])} "
                      f"batt={boot['battery_mv']} mV")
 
-    # REPORT_STATUS carries one code, so a pack under the firmware threshold
-    # keeps state at FAULT(0x0401) whatever the host does -- MANUAL and IDLE are
-    # unreachable. That is a bench precondition, not a protocol bug, so those
-    # two checks say SKIP with the voltage instead of turning the run red.
+    # Battery low is a WARN: it is latched and reported but must not stop the
+    # robot, so a low pack still reaches MANUAL. Keep the voltage visible
+    # because it changes what CLEAR_FAULT can do at step 5.
     batt_mv = boot["battery_mv"] if boot else 0
     pack_low = 0 < batt_mv < BATTERY_LOW_MV
     if pack_low:
-        client.check("电池电压", SKIP,
-                     f"{batt_mv} mV < {BATTERY_LOW_MV} mV，0x0401 锁存；"
-                     "MANUAL/IDLE 需充电后复测")
+        client.check("电池电压", INFO,
+                     f"{batt_mv} mV < {BATTERY_LOW_MV} mV，0x0401 为 WARN，只上报")
 
     # 2. Enable. The ACK proves the command path; STATUS proves the handler
     #    actually changed the machine, not just replied.
@@ -353,9 +351,6 @@ def run_auto(client: Client, move: bool, simulation: bool) -> None:
         state = status["state"] if status else -1
         if state == 2:
             client.check("使能后进入 MANUAL", PASS, f"state={_state_name(state)}")
-        elif state == 5 and pack_low and status["fault"] == FAULT_BATTERY_LOW:
-            client.check("使能后进入 MANUAL", SKIP,
-                         f"电池 {batt_mv} mV 低压，state 停在 FAULT")
         elif state == 5:
             client.check("使能后进入 MANUAL", FAIL,
                          f"state=FAULT，fault={_fault_name(status['fault'])}")
@@ -437,22 +432,26 @@ def run_auto(client: Client, move: bool, simulation: bool) -> None:
     client.check("ESTOP 状态 4", PASS if estop_status else FAIL,
                  _state_name(estop_status["state"]) if estop_status else "")
 
-    # 5. Clear. A low pack is the one condition the firmware can still
-    #    measure, so STATE here is a correct answer, not a bug.
+    # 5. Clear. Clearing the ESTOP latch must return to IDLE. A pack that is
+    #    still low re-latches 0x0401 (WARN) on the next STATUS, which does not
+    #    change the state, so accept that fault while the state itself is IDLE.
     t = time.monotonic()
     seq = client.send(P.Cmd.CLEAR_FAULT, P.clear_fault_payload())
     ack = client.expect_ack(P.Cmd.CLEAR_FAULT, seq)
     client.check("CLEAR_FAULT 有 ACK", PASS if ack else FAIL, _result_name(ack))
 
+    def idle_after_clear(s) -> bool:
+        if s["state"] != 1:
+            return False
+        return s["fault"] == 0 or (
+            pack_low and s["fault"] == FAULT_BATTERY_LOW)
+
     if ack is not None and ack.result == P.Result.OK:
-        cleared = client.wait_status(lambda s: s["fault"] == 0 and s["state"] == 1,
-                                     1.0, since=t)
+        cleared = client.wait_status(idle_after_clear, 1.0, since=t)
         if cleared:
             client.check("清除后回到 IDLE", PASS,
-                         f"state={_state_name(cleared['state'])}")
-        elif pack_low:
-            client.check("清除后回到 IDLE", SKIP,
-                         f"已清除，但电池 {batt_mv} mV 仍低压，0x0401 重新上报")
+                         f"state={_state_name(cleared['state'])}, "
+                         f"fault={_fault_name(cleared['fault'])}")
         else:
             after = client.wait_status(lambda s: True, 0.5)
             client.check("清除后回到 IDLE", FAIL,

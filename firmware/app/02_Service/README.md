@@ -7,9 +7,9 @@
 | 服务 | 职责 | 关键接口 |
 | --- | --- | --- |
 | `service_key` | 按键去抖之上的短按/长按策略 | `service_key_init/update`，回调 `(id, event)` |
-| `service_chassis` | 麦轮逆运动学、200 ms 指令超时、使能/急停、开环占空比、里程计 | `forward/backward/strafe/rotate/set_velocity/stop/emergency_stop` |
+| `service_chassis` | 麦轮逆运动学、四轮速度 PID、200 ms 指令超时、使能/急停、里程计、台架开环占空比 | `forward/backward/strafe/rotate/set_velocity/stop/emergency_stop`、`set_pid_gain/get_pid_gain`、`get_wheel_speeds/get_wheel_duty`、`set_test_duty/is_test_mode` |
 | `service_arm` | 六轴限位校验、目标跟踪、移动到舵机总线 | `set_joints/get_targets/get_states` |
-| `service_proto` | 串口协议实现：取字节、解帧、分发、ACK、SEQ 去重、上报组帧 | `process/register/send_*` |
+| `service_proto` | 串口协议实现：取字节、解帧、分发、ACK、SEQ 去重、上报组帧 | `process/register/send_*`，含 `send_wheel_speed`、`send_wheel_duty` |
 
 ## 为什么这些属于 service 而不是 app
 
@@ -44,8 +44,8 @@ app 只表达**意图**："前进"、"注册 SET_ENABLE 的处理函数"、"每 
 
 ```c
 service_chassis_set_velocity(vx, vy, wz, now_ms);   /* now_ms 由 app 提供 */
-service_chassis_apply(now_ms);                      /* 超时判定 */
-service_chassis_update_odometry(elapsed_ms);
+service_chassis_apply(now_ms, elapsed_ms);           /* 超时 + 四轮 PID */
+service_chassis_update_odometry(elapsed_ms);         /* 里程计积分 */
 service_key_update(elapsed_ms);
 ```
 
@@ -54,22 +54,57 @@ service_key_update(elapsed_ms);
 ## 线程模型
 
 - 服务本身**不是线程安全的**，每个服务的状态归一个任务所有。
-- 当前分配：`service_chassis` 的 `apply/odometry` 与 `service_key` 在控制任务；`service_proto`、`service_arm` 和底盘目标设置（`set_velocity/enable/emergency_stop`）在通信任务。
+- 当前分配：`service_chassis` 的 `apply/odometry/set_pid_gain` 与 `service_key` 在控制任务；`service_proto`、`service_arm` 和底盘目标设置（`set_velocity/enable/emergency_stop`）在通信任务。
 - 跨任务共享的只有底盘的目标速度、使能位和急停位，都是单字读写，Cortex-M3 上原子。
+- PID 增益不属于共享变量：通信任务只把 `{wheel, gain, value}` 放进队列，由控制任务调用 `set_pid_gain()`，因此 PID 的浮点状态始终只有一个写者。
 - `service_proto` 的 TX 只有通信任务一个调用者，因此不需要发送互斥锁。
 
 ## 安全语义
 
 | 情况 | 行为 |
 | --- | --- |
-| 200 ms 没有新的有效速度帧 | 目标清零、`platform_motor_stop_all()`、`cmd_timed_out` 置位 |
+| 200 ms 没有新的有效速度帧 | 目标清零、`platform_motor_stop_all()`、`cmd_timed_out` 置位；PID 冻结在零输出并清积分，下一帧从新的编码器基线重启 |
 | `enable` / `emergency_stop` | 同时开关四路 H 桥（`platform_motor_set_enable`）。只写占空比不够——桥臂使能前 BSP 只记录数值、不输出 |
 | `emergency_stop` | 锁存急停、失能驱动、目标清零、四路桥臂 coast，直到 `clear_estop` |
 | `clear_estop` | 只解除锁存，**不自动使能**，必须重新 `SET_ENABLE` |
 | 关节越界 | 整帧拒绝，六个关节一个都不动 |
 | CRC 连续错误 ≥ 10 帧 | `service_proto_crc_alarm()` 置位，由 app 上报 |
 
-`platform_motor_get_encoder()` 返回的是**累计**计数（平台层文档就是这么定义的），BSP 内部用增量累加。里程计要的是两次采样之间的增量，所以服务自己保存 `prev_counts` 做差——把它当增量用，速度会随着累计值一直涨到 `int16` 饱和（真机上一脚 200 mm/s 会读成 32767）。
+`platform_motor_get_encoder()` 返回的是**累计**计数（平台层文档就是这么定义的），BSP 内部用增量累加。里程计和速度环要的都是两次采样之间的增量，所以各自保存上一拍计数做差——把它当增量用，速度会随着累计值一直涨到 `int16` 饱和（真机上一脚 200 mm/s 会读成 32767）。
+
+## 速度环
+
+`service_chassis_apply()` 每个控制周期做四件事：
+
+1. 用麦轮逆运动学把 `(vx, vy, wz)` 分解成四个轮速目标；
+2. 每个轮速目标限幅到 `max_wheel_mm_s`；
+3. 用编码器累计计数差除以 `dt_ms` 得到该轮实测速度；
+4. 每轮独立跑 `platform_pid_update()`，输出直接作为有符号占空比（`-1000..1000`）。
+
+PID 本体在 `03_Platform/platform_middleware/platform_pid`，服务只负责“目标从哪来、反馈从哪来、输出写到哪”。这样 PID 的数学可以在 PC 上单测，服务只做轮速编排。
+
+- 增益是**每轮独立**的，应用层当前按左/右两组初值填充；`APP_CHASSIS_LEFT/RIGHT_PID_*` 只是启动值，不是标定结果。
+- 运行期整定走 `service_chassis_set_pid_gain(wheel, gain, value)`：只改指定轮，先复制配置、调 `platform_pid_init()` 成功后才提交，失败时原增益保持不变。切换时会清实测速度并重新采样该轮编码器，避免把旧基线当成速度尖峰。`get_pid_gain()` 返回当前生效值。范围校验（0 ≤ 增益 ≤ 1000）在服务层做，APP 另有更严的协议上限。
+- 积分采用条件积分抗饱和：输出已顶到限幅且误差还在往同一方向推时，不再累加积分。
+- 微分作用在测量值上，设定值阶跃不会产生微分冲击；当前 `Kd=0`，等编码器速度加滤波后再开。
+- `counts_per_mm_x1000 = 0` 时无法得到速度反馈，服务退回原来的开环占空比映射，避免“有 PID 但反馈恒为 0”把输出顶到满量程。
+- 使能/急停切换由控制任务在 `apply()` 里检测并复位 PID；不在通信任务里直接改 PID 状态，避免多字节浮点被并发写坏。
+- 超时期间 PID 冻结在零输出，超时解除后重新采样编码器基线，避免把等待期间累计的计数当成速度尖峰。
+- 目标为 0 且实测速度已低于 5 mm/s 时清积分、输出 0。否则刹车过程中积累的负积分会在停车后继续给反向占空比，轮子出现低速蠕动；5 mm/s 低于 10 ms 内一个编码器计数对应的约 4 mm/s，不会误判正常运动。
+
+四轮实测速度由 `service_chassis_get_wheel_speeds()` 暴露（FL/FR/RL/RR，mm/s），APP 以 `REPORT_WHEEL_SPEED`（`0xC6`）20 ms 上报，供上位机调参页面显示闭环效果；开环回退时全为零。
+
+### 台架开环测试
+
+量电机死区需要绕过速度环：只要速度环在，PID 就会自动补掉死区，量到的永远不是电机特性。`service_chassis_set_test_duty(wheel, permille, now_ms)` 就是这个旁路：
+
+- 只在控制任务调用（它拥有 PID 状态），调用时底盘必须已使能且未急停，否则返回错误；
+- `|permille| ≤ 400`，超过直接拒绝而不是截断；
+- 每个轮子单独计时，300 ms 没刷新就按 0；
+- 进入测试模式先清空速度目标和四轮测试占空比，保证只有被写入的那一轮会转；
+- 任何速度指令、`stop()`、失能、急停都退出测试模式；测试期间 200 ms 指令超时不生效（它有自己更短的过期）。
+
+`service_chassis_get_wheel_duty()` 返回每个轮子上一个控制周期实际写入的占空比，APP 以 `REPORT_WHEEL_DUTY`（`0xC7`）与轮速同拍上报。没有这个回读，主机只能假设"我发了多少固件就写了多少"，限幅或拒绝会被误判成"电机不转"。
 
 ## PC 单测
 
@@ -78,9 +113,11 @@ gcc -std=c99 -Wall -Wextra \
     -I firmware/app/03_Platform/platform_common \
     -I firmware/app/04_Impl \
     -I firmware/app/03_Platform/platform_bsp \
+    -I firmware/app/03_Platform/platform_middleware \
     -I firmware/app/02_Service/service_chassis \
     tests/unit/service/test_service_chassis.c \
     firmware/app/02_Service/service_chassis/service_chassis.c \
+    firmware/app/03_Platform/platform_middleware/platform_pid.c \
     -o build/test_service_chassis -lm
 
 gcc -std=c99 -Wall -Wextra \

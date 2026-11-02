@@ -405,6 +405,11 @@
               <FilePath>../Core/Src/gpio.c</FilePath>
             </File>
             <File>
+              <FileName>spi.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/spi.c</FilePath>
+            </File>
+            <File>
               <FileName>freertos.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/freertos.c</FilePath>
@@ -728,6 +733,11 @@
               <FileType>1</FileType>
               <FilePath>../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_uart.c</FilePath>
             </File>
+            <File>
+              <FileName>stm32f1xx_hal_spi.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_spi.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -828,6 +838,11 @@
               <FileType>1</FileType>
               <FilePath>../03_Platform/platform_mcu/platform_mcu_uart.c</FilePath>
             </File>
+            <File>
+              <FileName>platform_mcu_spi.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../03_Platform/platform_mcu/platform_mcu_spi.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -862,6 +877,11 @@
               <FileName>impl_uart_wrapper.c</FileName>
               <FileType>1</FileType>
               <FilePath>../04_Impl/impl_wrapper/impl_uart_wrapper.c</FilePath>
+            </File>
+            <File>
+              <FileName>impl_spi_wrapper.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../04_Impl/impl_wrapper/impl_spi_wrapper.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -898,6 +918,16 @@
               <FileType>1</FileType>
               <FilePath>../04_Impl/impl_mcu/impl_mcu_uart.c</FilePath>
             </File>
+            <File>
+              <FileName>impl_mcu_spi.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../04_Impl/impl_mcu/impl_mcu_spi.c</FilePath>
+            </File>
+            <File>
+              <FileName>impl_mcu_time.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../04_Impl/impl_mcu/impl_mcu_time.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -912,6 +942,11 @@
               <FileName>impl_bsp_buzzer.c</FileName>
               <FileType>1</FileType>
               <FilePath>../04_Impl/impl_bsp/impl_bsp_buzzer.c</FilePath>
+            </File>
+            <File>
+              <FileName>impl_bsp_flash.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../04_Impl/impl_bsp/impl_bsp_flash.c</FilePath>
             </File>
             <File>
               <FileName>impl_bsp_key.c</FileName>
@@ -959,6 +994,11 @@
               <FilePath>../06_BSP/bsp_buzzer_gpio.c</FilePath>
             </File>
             <File>
+              <FileName>bsp_flash_w25q64.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../06_BSP/bsp_flash_w25q64.c</FilePath>
+            </File>
+            <File>
               <FileName>bsp_key_gpio.c</FileName>
               <FileType>1</FileType>
               <FilePath>../06_BSP/bsp_key_gpio.c</FilePath>
@@ -997,6 +1037,21 @@
               <FileName>platform_filter.c</FileName>
               <FileType>1</FileType>
               <FilePath>../03_Platform/platform_middleware/platform_filter.c</FilePath>
+            </File>
+            <File>
+              <FileName>platform_pid.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../03_Platform/platform_middleware/platform_pid.c</FilePath>
+            </File>
+            <File>
+              <FileName>platform_wearlevel.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../03_Platform/platform_middleware/platform_wearlevel.c</FilePath>
+            </File>
+            <File>
+              <FileName>platform_logstore.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../03_Platform/platform_middleware/platform_logstore.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -1048,15 +1103,70 @@
               <FileType>1</FileType>
               <FilePath>../02_Service/service_proto/service_proto.c</FilePath>
             </File>
+            <File>
+              <FileName>service_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../02_Service/service_storage/service_storage.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
           <GroupName>App</GroupName>
           <Files>
             <File>
+              <FileName>app_battery.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_battery.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_fault.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_fault.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_handlers.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_handlers.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_params.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_params.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_report.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_report.c</FilePath>
+            </File>
+            <File>
               <FileName>app_robot.c</FileName>
               <FileType>1</FileType>
               <FilePath>../01_APP/app_robot/app_robot.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_state.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_state.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_storage.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_tasks.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_tasks.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_user_init.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../01_APP/app_robot/app_user_init.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_motion_test.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\01_APP\app_robot\app_motion_test.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -1079,5 +1189,14 @@
     </components>
     <files/>
   </RTE>
+
+  <LayerInfo>
+    <Layers>
+      <Layer>
+        <LayName>app</LayName>
+        <LayPrjMark>1</LayPrjMark>
+      </Layer>
+    </Layers>
+  </LayerInfo>
 
 </Project>

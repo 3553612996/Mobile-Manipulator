@@ -22,6 +22,7 @@
 #include "adc.h"
 #include "tim.h"
 #include "usart.h"
+#include "spi.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -96,6 +97,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART3_UART_Init();
+  MX_SPI2_Init();
   MX_ADC1_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();

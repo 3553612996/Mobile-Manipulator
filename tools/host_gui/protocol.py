@@ -34,6 +34,12 @@ class Cmd(IntEnum):
     SET_PARAM = 0x05
     ESTOP = 0x06
     CLEAR_FAULT = 0x07
+    PARAM_SAVE = 0x08
+    PARAM_RESET = 0x09
+    STORAGE_QUERY = 0x0A
+    LOG_EXPORT = 0x0B
+    CRASH_READ = 0x0C
+    LOG_CLEAR = 0x0D
 
 
 class Report(IntEnum):
@@ -44,6 +50,11 @@ class Report(IntEnum):
     STATUS = 0xC3
     EVENT = 0xC4
     HEARTBEAT = 0xC5
+    WHEEL_SPEED = 0xC6
+    WHEEL_DUTY = 0xC7
+    STORAGE = 0xC8
+    LOG = 0xC9
+    CRASH = 0xCA
 
 
 class Result(IntEnum):
@@ -52,6 +63,8 @@ class Result(IntEnum):
     BAD_STATE = 0x02
     UNKNOWN_CMD = 0x03
     FAILED = 0x04
+    BUSY = 0x05
+    STORAGE_UNAVAILABLE = 0x06
 
 
 RESULT_NAMES = {
@@ -60,6 +73,8 @@ RESULT_NAMES = {
     Result.BAD_STATE: "当前状态不允许",
     Result.UNKNOWN_CMD: "未知命令",
     Result.FAILED: "执行失败",
+    Result.BUSY: "忙",
+    Result.STORAGE_UNAVAILABLE: "存储不可用",
 }
 
 # Provisional until protocol.md fixes the REPORT_STATUS state enum; unknown
@@ -84,6 +99,10 @@ FAULT_NAMES = {
     0x0401: "电池低压",
     0x0402: "温度过高",
     0x0501: "急停触发",
+    0x0601: "参数区无效",
+    0x0602: "标定区无效",
+    0x0603: "存储写入失败",
+    0x0604: "分区表/镜像无效",
 }
 
 PARAM_NAMES = {
@@ -98,7 +117,64 @@ PARAM_NAMES = {
     0x10: "控制超时",
     0x11: "最大线速度",
     0x12: "最大角速度",
+    0x40: "日志等级",
+    0x41: "死区补偿开关",
 }
+
+# A/B/C/D = FL/FR/RL/RR. One gain id per wheel, value = gain * 1000.
+WHEEL_NAMES = ("A 左前", "B 右前", "C 左后", "D 右后")
+PID_PARAM_IDS = (
+    (0x20, 0x21, 0x22),
+    (0x23, 0x24, 0x25),
+    (0x26, 0x27, 0x28),
+    (0x29, 0x2A, 0x2B),
+)
+for _wheel, _ids in enumerate(PID_PARAM_IDS):
+    for _gain, _suffix in enumerate(("Kp", "Ki", "Kd")):
+        PARAM_NAMES[_ids[_gain]] = f"{WHEEL_NAMES[_wheel]} {_suffix}"
+
+# Bench-only open-loop duty, one id per wheel, value = permille [-400, 400].
+TEST_DUTY_IDS = (0x30, 0x31, 0x32, 0x33)
+for _wheel, _id in enumerate(TEST_DUTY_IDS):
+    PARAM_NAMES[_id] = f"{WHEEL_NAMES[_wheel]} 测试占空比"
+
+# Calibration ids: these live in the calibration region, everything else in
+# the parameter region. Restoring defaults must not touch these.
+CALIB_PARAM_IDS = (0x01, 0x02) + tuple(range(0x50, 0x60))
+for _wheel in range(4):
+    PARAM_NAMES[0x50 + _wheel] = f"{WHEEL_NAMES[_wheel]} 编码器比例"
+    PARAM_NAMES[0x54 + _wheel] = f"{WHEEL_NAMES[_wheel]} 正向起转占空比"
+    PARAM_NAMES[0x58 + _wheel] = f"{WHEEL_NAMES[_wheel]} 反向起转占空比"
+    PARAM_NAMES[0x5C + _wheel] = f"{WHEEL_NAMES[_wheel]} 轮方向"
+
+# Parameter ids grouped the way the calibration page writes them.
+GEOMETRY_IDS = {"wheel_base": 0x01, "wheel_diameter": 0x02}
+LIMIT_IDS = {"timeout_ms": 0x10, "max_linear": 0x11, "max_angular": 0x12}
+COUNTS_PER_MM_IDS = (0x50, 0x51, 0x52, 0x53)
+DUTY_FWD_IDS = (0x54, 0x55, 0x56, 0x57)
+DUTY_REV_IDS = (0x58, 0x59, 0x5A, 0x5B)
+DIRECTION_IDS = (0x5C, 0x5D, 0x5E, 0x5F)
+
+# 0xC9 REPORT_LOG / 0x0B LOG_EXPORT
+LOG_SOURCE_NAMES = {0: "运行日志", 1: "故障事件"}
+LOG_LEVEL_NAMES = {0: "DEBUG", 1: "INFO", 2: "WARN", 3: "ERROR"}
+LOG_TAG_NAMES = {1: "底盘", 2: "通信", 3: "机械臂", 4: "电源", 5: "急停", 6: "存储"}
+
+# 0xC8 REPORT_STORAGE bits, in the order protocol.md lists them.
+STORAGE_FLAG_NAMES = (
+    "参数已落盘", "参数区有效", "标定区有效", "保存失败",
+    "镜像A有效", "镜像B有效", "有未读崩溃", "日志已回卷",
+)
+STORAGE_FLAG_FIELDS = (
+    "clean", "param_valid", "calib_valid", "save_failed",
+    "image_a_valid", "image_b_valid", "crash_unread", "log_wrapped",
+)
+
+# 0xCA REPORT_CRASH: 16 slots on flash, 0xFF asks for the newest valid one,
+# and a chunk carries at most 57 bytes of the record (protocol.md 5.5.7).
+CRASH_SLOT_COUNT = 16
+CRASH_SLOT_LATEST = 0xFF
+CRASH_CHUNK_MAX = 57
 
 GRIPPER_ACTION_NAMES = {0: "张开", 1: "闭合"}
 GRIPPER_STATE_NAMES = {0: "张开", 1: "夹持", 2: "夹空"}
@@ -270,6 +346,37 @@ def clear_fault_payload(code: int = 0xFFFF) -> bytes:
     return struct.pack("<H", int(code) & 0xFFFF)
 
 
+SCOPE_PARAM = 0
+SCOPE_CALIB = 1
+SCOPE_ALL = 2
+
+
+def param_save_payload(scope: int = SCOPE_PARAM) -> bytes:
+    """scope: 0 = params, 1 = calibration, 2 = both."""
+    return struct.pack("<B", int(scope) & 0xFF)
+
+
+def param_reset_payload(scope: int = 0) -> bytes:
+    return struct.pack("<BB", int(scope) & 0xFF, 0xA5)
+
+
+def log_export_payload(source: int = 0, action: int = 1,
+                       from_seq: int = 0) -> bytes:
+    """action: 0 = stop, 1 = start. from_seq 0 means oldest available."""
+    return struct.pack("<BBI", int(source) & 0xFF, int(action) & 0xFF,
+                       max(0, min(0xFFFFFFFF, int(from_seq))))
+
+
+def crash_read_payload(slot: int = 0xFF, mark_read: bool = False) -> bytes:
+    """slot 0xFF = newest valid record."""
+    return struct.pack("<BB", int(slot) & 0xFF, 1 if mark_read else 0)
+
+
+def log_clear_payload(source: int = 0) -> bytes:
+    """source: 0 = run log, 1 = fault ring, 2 = crash, 3 = all."""
+    return struct.pack("<BB", int(source) & 0xFF, 0xA5)
+
+
 # ---------------------------------------------------------- payloads (up)
 
 def decode_odom(payload: bytes):
@@ -308,6 +415,152 @@ def decode_heartbeat(payload: bytes):
         return None
     state, counter = struct.unpack("<BH", payload)
     return {"state": state, "counter": counter}
+
+
+def decode_wheel_speed(payload: bytes):
+    if len(payload) != 8:
+        return None
+    fl, fr, rl, rr = struct.unpack("<4h", payload)
+    return {"fl_mm_s": fl, "fr_mm_s": fr, "rl_mm_s": rl, "rr_mm_s": rr}
+
+
+def decode_wheel_duty(payload: bytes):
+    """Duty the control tick last wrote, permille of full scale."""
+    if len(payload) != 8:
+        return None
+    fl, fr, rl, rr = struct.unpack("<4h", payload)
+    return {"fl_permille": fl, "fr_permille": fr,
+            "rl_permille": rl, "rr_permille": rr}
+
+
+def decode_storage(payload: bytes):
+    """0xC8: flags + counters. See protocol.md 5.5.5 for the bit layout."""
+    if len(payload) != 24:
+        return None
+    (flags, log_level, param_seq, calib_seq, _reserved, boot_total,
+     log_used, log_erase, last_save_s) = struct.unpack("<BBHHHIIII", payload)
+    return {
+        "flags": flags,
+        "log_level": log_level,
+        "param_seq": param_seq,
+        "calib_seq": calib_seq,
+        "boot_total": boot_total,
+        "log_used_bytes": log_used,
+        "log_erase_count": log_erase,
+        "last_save_s": last_save_s,
+        "dirty": not (flags & 0x01),
+        "clean": bool(flags & 0x01),
+        "param_valid": bool(flags & 0x02),
+        "calib_valid": bool(flags & 0x04),
+        "save_failed": bool(flags & 0x08),
+        "image_a_valid": bool(flags & 0x10),
+        "image_b_valid": bool(flags & 0x20),
+        "crash_unread": bool(flags & 0x40),
+        "log_wrapped": bool(flags & 0x80),
+    }
+
+
+def storage_flag_states(info: dict) -> list[tuple[str, bool]]:
+    """(label, set) pairs in protocol.md bit order, for the status panel."""
+    return [(name, bool(info.get(field)))
+            for name, field in zip(STORAGE_FLAG_NAMES, STORAGE_FLAG_FIELDS)]
+
+
+def decode_log(payload: bytes):
+    """0xC9: 15-byte header + up to 49 bytes of text."""
+    if len(payload) < 15:
+        return None
+    source, level, tag, flags, ts, seq, code, text_len = \
+        struct.unpack("<BBBBIIHB", payload[:15])
+    text = payload[15:15 + text_len]
+    if len(text) != text_len:
+        return None
+    return {
+        "source": source, "level": level, "tag": tag, "flags": flags,
+        "ts_s": ts, "seq": seq, "code": code,
+        "text": text.decode("utf-8", errors="replace"),
+        "more": bool(flags & 0x01), "end": bool(flags & 0x02),
+    }
+
+
+def decode_crash(payload: bytes):
+    """0xCA: 7-byte header + chunk data, reassemble by offset."""
+    if len(payload) < 7:
+        return None
+    slot, flags, offset, total_len, length = \
+        struct.unpack("<BBHHB", payload[:7])
+    data = payload[7:7 + length]
+    if len(data) != length:
+        return None
+    return {
+        "slot": slot, "more": bool(flags & 0x01), "offset": offset,
+        "total_len": total_len, "data": data,
+    }
+
+
+class CrashAssembler:
+    """Reassemble the 0xCA chunks of one crash record.
+
+    REPORT_CRASH has no end frame: the record is complete once the bytes
+    received reach total_len. A slot change, an offset gap or a partial record
+    must be thrown away rather than stitched together, because a dump with a
+    hole in it is worse than no dump at all.
+    """
+
+    MAX_RECORD_BYTES = 0xFFFF
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.slot: int | None = None
+        self.total_len = 0
+        self.chunks = 0
+        self.buffer = bytearray()
+
+    @property
+    def offset(self) -> int:
+        return len(self.buffer)
+
+    @property
+    def complete(self) -> bool:
+        return self.total_len > 0 and len(self.buffer) >= self.total_len
+
+    def feed(self, chunk: dict) -> str:
+        """Feed one decoded chunk. Returns "start", "chunk", "done", "gap"
+        or "bad"."""
+        slot = int(chunk["slot"])
+        offset = int(chunk["offset"])
+        total = int(chunk["total_len"])
+        data = bytes(chunk["data"])
+
+        if not data or total <= 0 or total > self.MAX_RECORD_BYTES:
+            return "bad"
+        if offset + len(data) > total:
+            return "bad"
+
+        if self.slot != slot:
+            self.reset()
+            self.slot = slot
+            self.total_len = total
+
+        if offset != len(self.buffer):
+            self.reset()
+            self.slot = slot
+            self.total_len = total
+            if offset != 0:
+                return "gap"
+
+        self.buffer.extend(data)
+        self.chunks += 1
+
+        if len(self.buffer) >= self.total_len:
+            del self.buffer[self.total_len:]
+            return "done"
+        return "start" if self.chunks == 1 else "chunk"
+
+    def record(self) -> bytes:
+        return bytes(self.buffer)
 
 
 def describe(frame: Frame) -> str:
@@ -356,6 +609,34 @@ def describe(frame: Frame) -> str:
         arm = decode_arm(frame.payload) or {}
         return (f"{name} joints={arm.get('angles_cdeg')} "
                 f"grip={arm.get('gripper_pos')} state={arm.get('gripper_state')}")
+    if frame.cmd == Report.WHEEL_SPEED:
+        wheel = decode_wheel_speed(frame.payload) or {}
+        return (f"{name} A={wheel.get('fl_mm_s')} B={wheel.get('fr_mm_s')} "
+                f"C={wheel.get('rl_mm_s')} D={wheel.get('rr_mm_s')} mm/s")
+    if frame.cmd == Report.WHEEL_DUTY:
+        duty = decode_wheel_duty(frame.payload) or {}
+        return (f"{name} A={duty.get('fl_permille')} B={duty.get('fr_permille')} "
+                f"C={duty.get('rl_permille')} D={duty.get('rr_permille')} ‰")
+    if frame.cmd == Report.STORAGE:
+        st = decode_storage(frame.payload) or {}
+        state = "已落盘" if not st.get("dirty", True) else "有未落盘参数"
+        return (f"{name} {state} param_seq={st.get('param_seq')} "
+                f"calib_seq={st.get('calib_seq')} "
+                f"log={st.get('log_used_bytes')}B "
+                f"擦除={st.get('log_erase_count')}次")
+    if frame.cmd == Report.LOG:
+        rec = decode_log(frame.payload) or {}
+        source = LOG_SOURCE_NAMES.get(rec.get("source"), "?")
+        level = LOG_LEVEL_NAMES.get(rec.get("level"), "?")
+        tail = " [结束]" if rec.get("end") else ""
+        return (f"{name} {source} {level} seq={rec.get('seq')} "
+                f"t={rec.get('ts_s')}s {rec.get('text', '')}{tail}")
+    if frame.cmd == Report.CRASH:
+        chunk = decode_crash(frame.payload) or {}
+        return (f"{name} slot={chunk.get('slot')} "
+                f"{chunk.get('offset')}/{chunk.get('total_len')} "
+                f"{len(chunk.get('data', b''))}B"
+                f"{' ...' if chunk.get('more') else ' 完'}")
 
     return f"{name} seq={frame.seq} len={len(frame.payload)}"
 
@@ -366,3 +647,6 @@ VECTOR_CRC = (b"123456789", 0x29B1)
 VECTOR_VELOCITY = bytes.fromhex("AA 55 06 01 01 2C 01 F4 01 72 3F")
 VECTOR_ENABLE = bytes.fromhex("AA 55 03 04 02 01 9F B5")
 VECTOR_ESTOP = bytes.fromhex("AA 55 02 06 03 39 38")
+VECTOR_PARAM_SAVE = bytes.fromhex("AA 55 03 08 04 00 79 7A")
+VECTOR_STORAGE_QUERY = bytes.fromhex("AA 55 02 0A 05 92 1D")
+VECTOR_LOG_EXPORT = bytes.fromhex("AA 55 08 0B 06 00 01 00 00 00 00 56 EC")

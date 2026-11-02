@@ -4,6 +4,7 @@
 
 ```text
 tools/
+├── android/     手机蓝牙遥控：Kotlin + Compose
 ├── bench/       台架测试：真机闭环、协议联调
 ├── docgen/      文档生成：Markdown → Word
 └── host_gui/    上位机：Qt 串口控制台
@@ -11,7 +12,10 @@ tools/
 
 | 工具 | 用途 | 依赖 | 引入节点 |
 | --- | --- | --- | --- |
+| [`android/`](android/) | 手机蓝牙遥控：HC-05/06 SPP 直连 STM32，摇杆、使能、急停与遥测 | JDK 17、Android SDK 36 | M3 |
 | [`bench/proto_loop.py`](bench/proto_loop.py) | 串口协议闭环测试：下发 → ACK → 上报三段核对，支持静态/运动/模拟器 | `pyserial` | M2 |
+| [`bench/wheel_tune.py`](bench/wheel_tune.py) | 四轮死区扫描（开环）与速度环阶跃响应测量，输出 Markdown 表与 CSV | `pyserial` | M3 |
+| [`bench/odom_calib.py`](bench/odom_calib.py) | 落地里程计标定：直行比例（0x50~0x53）与原地旋转（k / 0x01），输出 Markdown 表与 CSV | `pyserial` | M3 |
 | [`docgen/md2docx.py`](docgen/md2docx.py) | 把 `docs/**/*.md` 转成 `docs/word/**/*.docx`，目录结构镜像 | `python-docx` | M2 |
 | [`host_gui/`](host_gui/) | 上位机：遥测曲线、速度滑杆、急停、机械臂与夹爪 | `PySide6`、`pyserial` | M2 |
 
@@ -23,12 +27,27 @@ python tools/bench/proto_loop.py --list
 python tools/bench/proto_loop.py --port COM7 --auto
 python tools/bench/proto_loop.py --sim --auto --move
 
+# 四轮调参（会让轮子转，必须架空并显式 --yes）
+python tools/bench/wheel_tune.py --port COM7 deadzone --yes
+python tools/bench/wheel_tune.py --port COM7 step --speed 200 --yes
+
+# 里程计标定（落地，直行留 2.5 m、旋转留 0.6 m；先直行再旋转）
+# COM7 也可以是 HC-05 配对后系统生成的蓝牙 SPP 串口，电脑不用跟着车走
+python tools/bench/odom_calib.py --port COM7 straight --actual 1960 --yes
+python tools/bench/odom_calib.py --port COM7 all --apply --yes
+# 完全不接电脑：APP_MOTION_TEST_ENABLE=1 的固件，短按板载键直行 1 m，长按 1.5 s 原地 360°
+
 # 上位机（--sim 不需要硬件）
 python tools/host_gui/main.py
 python tools/host_gui/main.py --sim
 
 # 文档转 Word
 python tools/docgen/md2docx.py
+
+# 安卓遥控端（需要 JDK 17 与 Android SDK 36）
+cd tools/android
+./gradlew :app:assembleDebug
+./gradlew :app:testDebugUnitTest
 ```
 
 ## 约定
