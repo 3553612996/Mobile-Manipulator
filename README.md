@@ -22,7 +22,7 @@
 ├── firmware/       STM32 固件：CubeMX 工程 + 分层的 app 代码
 ├── mobile_manipulator_ws/src/  ROS 2 功能包
 ├── models/         模型说明（权重不入库，见 models/README.md）
-├── tools/          PC 侧工具：bench/ 台架测试、host_gui/ 上位机、docgen/ 文档生成
+├── tools/          开发工具：android/ 手机遥控、bench/ 台架测试、host_gui/ 上位机、docgen/ 文档生成
 ├── config/         udev 规则等系统配置
 ├── scripts/        构建与部署脚本
 └── tests/          单元测试（按被测模块分目录，见 tests/README.md）

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 只做窗口底色与系统栏，界面全部由 Compose 画。 -->
+    <style name="Theme.BtCar" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0B0F14</item>
+        <item name="android:statusBarColor">#0B0F14</item>
+        <item name="android:navigationBarColor">#0B0F14</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
