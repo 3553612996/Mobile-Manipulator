@@ -4,6 +4,7 @@
 
 ```text
 tools/
+├── android/     手机蓝牙遥控：Kotlin + Compose
 ├── bench/       台架测试：真机闭环、协议联调
 ├── docgen/      文档生成：Markdown → Word
 └── host_gui/    上位机：Qt 串口控制台
@@ -11,6 +12,7 @@ tools/
 
 | 工具 | 用途 | 依赖 | 引入节点 |
 | --- | --- | --- | --- |
+| [`android/`](android/) | 手机蓝牙遥控：HC-05/06 SPP 直连 STM32，摇杆、使能、急停与遥测 | JDK 17、Android SDK 36 | M3 |
 | [`bench/proto_loop.py`](bench/proto_loop.py) | 串口协议闭环测试：下发 → ACK → 上报三段核对，支持静态/运动/模拟器 | `pyserial` | M2 |
 | [`bench/wheel_tune.py`](bench/wheel_tune.py) | 四轮死区扫描（开环）与速度环阶跃响应测量，输出 Markdown 表与 CSV | `pyserial` | M3 |
 | [`docgen/md2docx.py`](docgen/md2docx.py) | 把 `docs/**/*.md` 转成 `docs/word/**/*.docx`，目录结构镜像 | `python-docx` | M2 |
@@ -34,6 +36,11 @@ python tools/host_gui/main.py --sim
 
 # 文档转 Word
 python tools/docgen/md2docx.py
+
+# 安卓遥控端（需要 JDK 17 与 Android SDK 36）
+cd tools/android
+./gradlew :app:assembleDebug
+./gradlew :app:testDebugUnitTest
 ```
 
 ## 约定
