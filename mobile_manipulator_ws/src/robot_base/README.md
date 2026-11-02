@@ -44,7 +44,7 @@
 | --- | --- | --- |
 | `port` | `/dev/robot_stm32` | udev 固定名；未安装规则时为 `/dev/ttyUSB0` |
 | `baud` | `115200` | 8N1，无硬件流控 |
-| `wheel_separation_m` | `0.24` | 必须与固件轮距标定一致 |
+| `wheel_separation_m` | `0.165` | 必须与固件轮距标定一致（2026-11-02 实测） |
 | `velocity_period_ms` | `20` | 速度帧周期 |
 | `cmd_vel_timeout_s` | `0.5` | ROS 侧 cmd_vel 看门狗 |
 | `link_timeout_s` | `0.5` | 无任何合法帧判定失联 |

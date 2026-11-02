@@ -155,7 +155,7 @@ private:
   {
     port_ = declare_parameter<std::string>("port", "/dev/robot_stm32");
     baud_ = declare_parameter<int>("baud", 115200);
-    wheel_separation_m_ = declare_parameter<double>("wheel_separation_m", 0.24);
+    wheel_separation_m_ = declare_parameter<double>("wheel_separation_m", 0.165);
     velocity_period_ms_ = declare_parameter<int>("velocity_period_ms", 20);
     cmd_vel_timeout_s_ = declare_parameter<double>("cmd_vel_timeout_s", 0.5);
     link_timeout_s_ = declare_parameter<double>("link_timeout_s", 0.5);
@@ -652,7 +652,7 @@ private:
 
   std::string port_;
   int baud_{115200};
-  double wheel_separation_m_{0.24};
+  double wheel_separation_m_{0.165};
   int velocity_period_ms_{20};
   double cmd_vel_timeout_s_{0.5};
   double link_timeout_s_{0.5};

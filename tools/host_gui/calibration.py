@@ -24,10 +24,11 @@ from . import protocol as p
 from .protocol import Cmd
 from .widgets import CRITICAL, GOOD, WARNING, Card
 
-# app_robot_config.h: half_width 120 (track = 240 mm), wheel diameter 60 mm,
+# app_robot_config.h: track = 165 mm (2026-11-02), wheel diameter 60 mm,
 # counts_per_mm = 13 x 4 x 90 / (pi x 60) = 24.828. The startup duty is the
 # measured reliable start per wheel (docs/bench/pid-tuning.md 3.3), FL/FR/RL/RR.
-DEFAULT_WHEEL_BASE_MM = 240
+# The protocol field is called wheel_base (0x01) but carries the track width.
+DEFAULT_WHEEL_BASE_MM = 165
 DEFAULT_WHEEL_DIAMETER_MM = 60
 DEFAULT_COUNTS_PER_MM = 24828
 DEFAULT_DUTY_FWD = (75, 67, 82, 80)

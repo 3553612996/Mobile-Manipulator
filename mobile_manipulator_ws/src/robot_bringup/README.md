@@ -43,7 +43,7 @@ map ──(SLAM / AMCL)── odom ──(base_bridge)── base_link
 | --- | --- | --- |
 | `base_length` / `base_width` | 0.245 / 0.195 | ✅ 已量（含轮外缘） |
 | `ground_clearance` | 0.040 | ✅ 底盘底面离地 |
-| `wheelbase` / `wheel_separation` | 0.185 / 0.240 | ✅ 轴距已量；**轮距必须等于固件 `SET_PARAM 0x01`** |
+| `wheelbase` / `wheel_separation` | 0.170 / 0.165 | ✅ 2026-11-02 实测；**轮距必须等于固件 `SET_PARAM 0x01`** |
 | `deck2_top_z` | 0.204 | ✅ 由"层间 64 mm"换算 |
 | `deck2_length` / `deck2_width` / `deck2_thickness` | 0.245 / 0.195 / 0.005 | ⬜ 沿用底盘尺寸，待实测 |
 | `arm_base_height` | 0.070 | ✅ 底座高出第二层板 70 mm |

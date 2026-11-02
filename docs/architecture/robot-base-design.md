@@ -196,7 +196,7 @@ linear.x  = (vl + vr) / 2000.0          [m/s]
 angular.z = (vr - vl) / 1000.0 / wheel_separation_m   [rad/s]
 ```
 
-- `wheel_separation_m` 默认 0.24 m，对应固件 `SET_PARAM 0x01` 的默认轮距 240 mm。
+- `wheel_separation_m` 默认 0.165 m，对应固件 `SET_PARAM 0x01` 的默认轮距 165 mm。
 - v1 没有 `GET_PARAM`，固件里的标定值读不回来；改标定后必须人工同步 yaml，否则位姿（固件积分）与 twist（ROS 计算）会互相矛盾，EKF 缓慢漂移。
 - 台架上发 `w = +500 mrad/s`，yaw 应增大；本次实测符号正确。若反向，只在 ROS 侧取负，不改固件。
 - 协方差是占位值（`0.05 m² / 0.02 rad²` 等），定位/EKF 接入前按实测重标。
@@ -282,7 +282,7 @@ angular.z = (vr - vl) / 1000.0 / wheel_separation_m   [rad/s]
 | --- | --- | --- | --- |
 | `port` | `/dev/robot_stm32` | — | udev 固定名；未安装规则时为 `/dev/ttyUSB0` |
 | `baud` | `115200` | bps | 8N1，无流控 |
-| `wheel_separation_m` | `0.24` | m | 必须与固件 `SET_PARAM 0x01` 一致 |
+| `wheel_separation_m` | `0.165` | m | 必须与固件 `SET_PARAM 0x01` 一致 |
 | `velocity_period_ms` | `20` | ms | 速度帧周期 |
 | `cmd_vel_timeout_s` | `0.5` | s | 超时后发零速 |
 | `link_timeout_s` | `0.5` | s | 无帧判定失联 |
