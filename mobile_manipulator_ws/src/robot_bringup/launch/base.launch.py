@@ -11,6 +11,7 @@
 用法：
   ros2 launch robot_bringup base.launch.py
   ros2 launch robot_bringup base.launch.py rviz:=true
+  ros2 launch robot_bringup base.launch.py port:=/dev/ttyUSB1 rviz:=true
 """
 
 from pathlib import Path
@@ -31,6 +32,7 @@ def generate_launch_description():
     rviz_config = share / "config" / "robot.rviz"
 
     rviz = LaunchConfiguration("rviz")
+    port = LaunchConfiguration("port")
 
     return LaunchDescription(
         [
@@ -38,6 +40,11 @@ def generate_launch_description():
                 "rviz",
                 default_value="false",
                 description="Start RViz2 with config/robot.rviz",
+            ),
+            DeclareLaunchArgument(
+                "port",
+                default_value="/dev/robot_stm32",
+                description="STM32 chassis serial device",
             ),
             Node(
                 package="robot_state_publisher",
@@ -57,7 +64,7 @@ def generate_launch_description():
                 executable="base_bridge",
                 name="base_bridge",
                 output="screen",
-                parameters=[str(config)],
+                parameters=[str(config), {"port": port}],
             ),
             Node(
                 package="rviz2",

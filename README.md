@@ -1,5 +1,7 @@
 # Mobile-Manipulator
 
+[![CI](https://github.com/3553612996/Mobile-Manipulator/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/3553612996/Mobile-Manipulator/actions/workflows/ci.yml)
+
 六轴移动抓取机器人 | RK3566 (ROS2) + STM32 双控架构 | 激光 SLAM 建图导航 · YOLO+RKNN 端侧视觉 · 手眼标定抓取 · Vosk 离线语音
 
 > 当前版本：**v0.3.0（M3 底盘闭环）** —— 四轮速度环、参数与标定固化、落地 1 m / 360° 里程计初步。
@@ -48,13 +50,14 @@
 | [M2 架构分层检查](docs/nodes/m2/layering-audit.md) | 分层解耦检查方法、证据与差异说明 |
 | [M3 测试报告](docs/nodes/m3/test-report.md) | 四轮速度环台架结果、参数固化、按键 1 m / 360° 落地初步 |
 | [M3 架构分层检查](docs/nodes/m3/layering-audit.md) | 分层解耦检查方法与发布前收敛记录 |
+| [M4 板端部署与建图](docs/nodes/m4/board-deploy.md) | RK3566 板端部署、PC 端建图与定位、room2 地图 |
 
 ## 开发进度
 
 - [x] 板端环境与 ROS 2 工作空间（骨架完成，板端构建待补）——见 [M1 测试报告](docs/nodes/m1/test-report.md)
 - [x] 串口通信打通（协议解析 + CRC 校验 + 超时重发）——见 [M2 测试报告](docs/nodes/m2/test-report.md)
 - [x] 底盘闭环：PWM / 编码器 / PID / 里程计 —— M3 通过（架空台架 + 落地里程计初步）——见 [M3 测试报告](docs/nodes/m3/test-report.md)
-- [ ] 激光建图与定位
+- [x] 激光建图与定位 —— M4 通过（板端只发 /odom、/scan、TF；PC 端 SLAM 建图，room2 136×75 @0.05 m）——见 [M4 部署记录](docs/nodes/m4/board-deploy.md)
 - [ ] Nav2 导航
 - [ ] 相机内参与手眼标定
 - [ ] YOLO 训练与 RKNN 端侧部署
@@ -72,7 +75,19 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-ROS 2 侧已有 `robot_base` 串口桥接、`robot_lidar` X2 驱动和 `robot_bringup` launch，其余节点随 M4 之后的里程碑补充，详见 [mobile_manipulator_ws](mobile_manipulator_ws/README.md)。固件用 Keil MDK 打开 [app.uvprojx](firmware/app/MDK-ARM/app.uvprojx) 构建，目标 STM32F103RCT6。
+ROS 2 侧已有 `robot_base` 串口桥接、`robot_lidar` X2 驱动和 `robot_bringup` launch；M4 已完成板端部署（`board.launch.py`）与 PC 端建图（`remote_mapping.launch.py`），Nav2/视觉/任务节点随 M5+ 补充，详见 [mobile_manipulator_ws](mobile_manipulator_ws/README.md)。固件用 Keil MDK 打开 [app.uvprojx](firmware/app/MDK-ARM/app.uvprojx) 构建，目标 STM32F103RCT6。
+
+## 持续集成
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在推送到 `develop`、向 `develop`/`main` 提 PR 时跑三组检查：
+
+| 任务 | 内容 |
+| --- | --- |
+| L1 单元测试 | 14 个 host gcc 测试，`scripts/run_unit_tests.py` 直接从各测试文件头注释里取 `gcc` 命令，不再维护第二份编译参数 |
+| 上位机协议 | `tools/host_gui/test_protocol.py` 的 38 个协议向量 |
+| ROS 2 | `ros:humble` 容器里 `colcon build` + `colcon test`（`robot_base`、`robot_lidar` 的 gtest） |
+
+固件是 Keil ARMCC 工程，Linux runner 上跑不了；固件编译门禁仍在本地 `UV4.exe -b`，CI 只覆盖能脱离硬件的部分。
 
 ## 说明
 

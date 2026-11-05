@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware-unit:
+    name: L1 单元测试（host gcc）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 构建并运行全部 L1 测试
+        run: python scripts/run_unit_tests.py
+
+  host-protocol:
+    name: 上位机协议对拍
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 38 个协议向量
+        run: python tools/host_gui/test_protocol.py
+
+  ros2:
+    name: ROS 2 构建与测试
+    runs-on: ubuntu-22.04
+    container: ros:humble
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装构建依赖
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ros-humble-tf2-ros \
+            ros-humble-nav-msgs \
+            ros-humble-diagnostic-msgs \
+            ros-humble-std-srvs \
+            ros-humble-ament-cmake-gtest
+      - name: colcon build
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          cd mobile_manipulator_ws
+          colcon build --symlink-install --event-handlers console_direct+
+      - name: colcon test
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          cd mobile_manipulator_ws
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose
