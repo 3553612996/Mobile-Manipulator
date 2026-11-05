@@ -26,6 +26,7 @@
 #include "app_robot/app_handlers.h"
 #include "app_robot/app_fault.h"
 #include "app_robot/app_report.h"
+#include "app_robot/app_battery.h"
 #include "app_robot/app_params.h"
 #include "app_robot/app_storage.h"
 #include "app_robot/app_robot_config.h"
@@ -191,6 +192,7 @@ void app_tasks_comm_entry(void *argument)
 
     (void)argument;
 
+    app_battery_init();
     app_report_init();
 
     for (;;)
@@ -210,6 +212,10 @@ void app_tasks_comm_entry(void *argument)
                                                       : PLATFORM_FALSE);
 
         app_handlers_process_pending(now_ms);
+
+        /* Refresh the filtered pack voltage before the fault and report paths
+         * read app_battery_low(). */
+        app_battery_tick(now_ms);
         app_fault_poll(now_ms);
         app_report_tick(now_ms);
     }
