@@ -50,13 +50,14 @@
 | [M2 架构分层检查](docs/nodes/m2/layering-audit.md) | 分层解耦检查方法、证据与差异说明 |
 | [M3 测试报告](docs/nodes/m3/test-report.md) | 四轮速度环台架结果、参数固化、按键 1 m / 360° 落地初步 |
 | [M3 架构分层检查](docs/nodes/m3/layering-audit.md) | 分层解耦检查方法与发布前收敛记录 |
+| [M4 板端部署与建图](docs/nodes/m4/board-deploy.md) | RK3566 板端部署、PC 端建图与定位、room2 地图 |
 
 ## 开发进度
 
 - [x] 板端环境与 ROS 2 工作空间（骨架完成，板端构建待补）——见 [M1 测试报告](docs/nodes/m1/test-report.md)
 - [x] 串口通信打通（协议解析 + CRC 校验 + 超时重发）——见 [M2 测试报告](docs/nodes/m2/test-report.md)
 - [x] 底盘闭环：PWM / 编码器 / PID / 里程计 —— M3 通过（架空台架 + 落地里程计初步）——见 [M3 测试报告](docs/nodes/m3/test-report.md)
-- [ ] 激光建图与定位
+- [x] 激光建图与定位 —— M4 通过（板端只发 /odom、/scan、TF；PC 端 SLAM 建图，room2 136×75 @0.05 m）——见 [M4 部署记录](docs/nodes/m4/board-deploy.md)
 - [ ] Nav2 导航
 - [ ] 相机内参与手眼标定
 - [ ] YOLO 训练与 RKNN 端侧部署
@@ -74,7 +75,7 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-ROS 2 侧已有 `robot_base` 串口桥接、`robot_lidar` X2 驱动和 `robot_bringup` launch，其余节点随 M4 之后的里程碑补充，详见 [mobile_manipulator_ws](mobile_manipulator_ws/README.md)。固件用 Keil MDK 打开 [app.uvprojx](firmware/app/MDK-ARM/app.uvprojx) 构建，目标 STM32F103RCT6。
+ROS 2 侧已有 `robot_base` 串口桥接、`robot_lidar` X2 驱动和 `robot_bringup` launch；M4 已完成板端部署（`board.launch.py`）与 PC 端建图（`remote_mapping.launch.py`），Nav2/视觉/任务节点随 M5+ 补充，详见 [mobile_manipulator_ws](mobile_manipulator_ws/README.md)。固件用 Keil MDK 打开 [app.uvprojx](firmware/app/MDK-ARM/app.uvprojx) 构建，目标 STM32F103RCT6。
 
 ## 持续集成
 
