@@ -73,7 +73,7 @@
 | M1 | 板端环境、ROS 2 工作空间 | ✅ 工作空间骨架完成，板端构建待补 · 见 [M1 测试报告](nodes/m1/test-report.md) |
 | M2 | 串口协议打通（CRC、状态机、测试向量） | ✅ 见 [M2 测试报告](nodes/m2/test-report.md) |
 | M3 | 底盘闭环：PWM / 编码器 / PID / 里程计 | ✅ 架空台架 + 落地里程计初步 · 见 [M3 测试报告](nodes/m3/test-report.md) |
-| M4 | 激光建图与定位 | ⬜ |
+| M4 | 激光建图与定位 | ✅ PC 端建图 + 定位链路通过 · 见 [板端部署与建图](nodes/m4/board-deploy.md) |
 | M5 | Nav2 导航 | ⬜ |
 | M6 | 相机标定 + 手眼标定 | ⬜ |
 | M7 | YOLO 训练与 RKNN 端侧部署 | ⬜ |

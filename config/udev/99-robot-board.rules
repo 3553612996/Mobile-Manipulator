@@ -1,0 +1,11 @@
+# LubanCat 1 RK3566：两颗 CH340 VID/PID 相同，按 USB 控制器路径区分。
+# 底盘口在重枚举后 busnum 会变化，所以不能写 busnum。
+# 核对：
+#   udevadm info -q property -n /dev/ttyUSB0 | grep DEVPATH
+#   udevadm info -q property -n /dev/ttyUSB1 | grep DEVPATH
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", \
+    DEVPATH=="*/fd000000.usb/*", \
+    SYMLINK+="robot_lidar", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", \
+    DEVPATH=="*/fd8c0000.usb/*", \
+    SYMLINK+="robot_stm32", GROUP="dialout", MODE="0660"

@@ -60,6 +60,8 @@ map ──(SLAM / AMCL)── odom ──(base_bridge)── base_link
 | `launch/lidar.launch.py` | X2 雷达驱动（`/scan`、`/lidar/points`） | M4 |
 | `launch/mapping.launch.py` | 底盘 + 雷达 + SLAM Toolbox + RViz，本机串口建图 | M4 |
 | `launch/mapping_external.launch.py` | 订阅主机 `/lidar/raw`、`/stm32/raw` 建图 | M4 测试 |
+| `launch/board.launch.py` | RK3566 板端：底盘 + 雷达 + TF，不建图 | M4 |
+| `launch/remote_mapping.launch.py` | PC 端：接收板卡 `/scan`/`/odom` + TF，跑 SLAM | M4 |
 | `launch/slam.launch.py` | 激光建图与定位（后续拆分/定位模式） | M4 |
 | `launch/nav2.launch.py` | Nav2 导航 | M5 |
 | `launch/vision.launch.py` | 相机与视觉推理 | M7 |

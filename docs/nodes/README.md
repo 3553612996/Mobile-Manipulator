@@ -7,6 +7,7 @@
 | [M1](m1/) | [测试报告](m1/test-report.md) | ✅ 骨架完成（板端构建待补） |
 | [M2](m2/) | [测试报告](m2/test-report.md)、[架构分层检查](m2/layering-audit.md) | ✅ 通过 |
 | [M3](m3/) | [测试报告](m3/test-report.md)、[架构分层检查](m3/layering-audit.md) | ✅ 通过（架空台架 + 落地里程计初步；落地复测清单见报告 6.2） |
+| [M4](m4/) | [板端部署与 PC 端建图](m4/board-deploy.md) | ✅ 建图与定位链路通过（PC 端；Nav2 属 M5） |
 
 ## 约定
 
