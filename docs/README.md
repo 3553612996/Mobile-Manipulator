@@ -38,6 +38,7 @@ docs/
 | M1 | [测试报告](nodes/m1/test-report.md) |
 | M2 | [测试报告](nodes/m2/test-report.md)、[架构分层检查](nodes/m2/layering-audit.md) |
 | M3 | [测试报告](nodes/m3/test-report.md)、[架构分层检查](nodes/m3/layering-audit.md) |
+| M4 | [板端部署与 PC 端建图](nodes/m4/board-deploy.md) |
 
 ## 项目级
 
