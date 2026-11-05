@@ -49,9 +49,9 @@
 | `robot_base` | ✅ | PC 直连验证：`/odom` 45.6 Hz、断链重连、服务 ACK | 50 个 gtest、`robot-base-design.md` |
 | `robot_lidar` | ✅ | X2 实机 6.11 Hz，`/scan` 720 bin | 15 个 gtest、`robot_lidar/README.md` |
 | `robot_interfaces` | 🚧 | `RobotStatus` / `SystemEvent` / `ClearFault` / `GetVersion` / `Grasp` 已定义，字段待 M8 冻结 | `robot_interfaces/` |
-| `robot_bringup` | 🚧 | base / lidar 的 launch 与参数、URDF 骨架 | `robot_bringup/` |
+| `robot_bringup` | 🚧 | base / lidar / mapping / board / navigation 的 launch 与参数、URDF 骨架；Nav2 参数已落地 | `robot_bringup/` |
 | `robot_arm` / `robot_vision` / `robot_speech` / `robot_task` | 📐 | 目录与接口规划完成，源码为空 | 第 5.5～5.8 节 |
-| SLAM / Nav2 | 📐 | 方案与参数规划完成，尚未接入 | `project-intro.md` 里程碑 M4/M5 |
+| SLAM / Nav2 | 🚧 | SLAM 已接入（M4）；Nav2 + AMCL 离线闭环通过（M5），实机验收待补 | M4/M5 节点报告 |
 | 总线舵机升级 | 📐 | UART5 半双工 + YH ASCII 的目标设计，当前硬件用软件 PWM | 第 4.5.2 节 |
 
 > **写法约定**：本文描述"设计应当如何"，实现状态以上表为准。未实现的模块不写成已完成；未实测的指标保持"待测"。
@@ -1418,7 +1418,7 @@ Host 发 CLEAR_FAULT
 | `/get_param` | 无读取命令 | 轮距等标定只能人工同步 yaml | 扩展协议或增加参数回读 |
 | 横向速度 | `SET_VELOCITY` 只有 v/w | `linear.y` 被丢弃，麦轮横移能力未用 | 扩展协议或新增带 vy 的命令 |
 | 视觉 / 语音 / 任务 | 仅设计 | 抓取闭环未打通 | M6～M9 按第 5 章实现 |
-| Nav2 / SLAM | 未接入 | 只能遥控，不能自主导航 | M4 / M5 |
+| Nav2 / SLAM | SLAM 已接入；Nav2 离线闭环通过 | 实机导航精度与避障未验收 | M5 实机测试 |
 | 视觉协方差 | 占位值 | EKF 融合权重不准 | 定位接入前实测重标 |
 | 板端实时性 | ROS 2 默认调度，20 ms 定时器有毫秒级抖动 | 极端负载下速度帧延迟 | 需要时用 `SCHED_FIFO` / `ros2_control`，MCU 200 ms 兜底 |
 | 多实例 | 同名节点不互斥 | 两个 `base_bridge` 争抢串口 | 启动脚本保证单实例；后续加锁文件 |

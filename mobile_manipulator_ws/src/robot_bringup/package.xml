@@ -20,8 +20,24 @@
   <exec_depend>robot_raw_bridge</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
-  <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>teleop_twist_keyboard</exec_depend>
+
+  <!-- M5 导航：navigation.launch.py 直接包含 nav2_bringup 的 bringup_launch.py，
+       插件由 params 指定。逐项声明，避免换机器时只装了 nav2_bringup 的子集。 -->
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_amcl</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_navfn_planner</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_dwb_controller</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_smoother</exec_depend>
+  <exec_depend>nav2_waypoint_follower</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_rviz_plugins</exec_depend>
   <exec_depend>robot_arm</exec_depend>
   <exec_depend>robot_vision</exec_depend>
   <exec_depend>robot_speech</exec_depend>

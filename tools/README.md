@@ -5,7 +5,7 @@
 ```text
 tools/
 ├── android/     手机蓝牙遥控：Kotlin + Compose
-├── bench/       台架测试：真机闭环、协议联调
+├── bench/       台架测试：真机闭环、协议联调、Nav2 离线仿真
 ├── docgen/      文档生成：Markdown → Word
 └── host_gui/    上位机：Qt 串口控制台
 ```
@@ -16,6 +16,9 @@ tools/
 | [`bench/proto_loop.py`](bench/proto_loop.py) | 串口协议闭环测试：下发 → ACK → 上报三段核对，支持静态/运动/模拟器 | `pyserial` | M2 |
 | [`bench/wheel_tune.py`](bench/wheel_tune.py) | 四轮死区扫描（开环）与速度环阶跃响应测量，输出 Markdown 表与 CSV | `pyserial` | M3 |
 | [`bench/odom_calib.py`](bench/odom_calib.py) | 落地里程计标定：直行比例（0x50~0x53）与原地旋转（k / 0x01），输出 Markdown 表与 CSV | `pyserial` | M3 |
+| [`bench/nav_goal.py`](bench/nav_goal.py) | 命令行发 `NavigateToPose`；可先发 `/initialpose`、调用 `/set_enable` | ROS 2 Humble + Nav2 | M5 |
+| [`bench/nav_sim.py`](bench/nav_sim.py) | 离线假底盘：按地图射线生成 `/scan`，用 `/cmd_vel` 积分 `/odom` 与 TF | `numpy`、`Pillow`、ROS 2 | M5 |
+| [`bench/nav_smoke.sh`](bench/nav_smoke.sh) | 一键跑离线 Nav2 闭环（nav2 + nav_sim + nav_goal） | ROS 2 Humble + Nav2 | M5 |
 | [`docgen/md2docx.py`](docgen/md2docx.py) | 把 `docs/**/*.md` 转成 `docs/word/**/*.docx`，目录结构镜像 | `python-docx` | M2 |
 | [`host_gui/`](host_gui/) | 上位机：遥测曲线、速度滑杆、急停、机械臂与夹爪 | `PySide6`、`pyserial` | M2 |
 
@@ -36,6 +39,10 @@ python tools/bench/wheel_tune.py --port COM7 step --speed 200 --yes
 python tools/bench/odom_calib.py --port COM7 straight --actual 1960 --yes
 python tools/bench/odom_calib.py --port COM7 all --apply --yes
 # 完全不接电脑：APP_MOTION_TEST_ENABLE=1 的固件，短按板载键直行 1 m，长按 1.5 s 原地 360°
+
+# Nav2：离线闭环（不接硬件）/ 实机发目标
+tools/bench/nav_smoke.sh
+python tools/bench/nav_goal.py --enable --goal 1.5 -0.5 0
 
 # 上位机（--sim 不需要硬件）
 python tools/host_gui/main.py

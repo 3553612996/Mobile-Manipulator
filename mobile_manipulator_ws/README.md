@@ -1,6 +1,6 @@
 # mobile_manipulator_ws
 
-RK3566 侧的 ROS 2 Humble 工作空间，对应本项目的移动抓取机器人。M1 建立了**可编译的包骨架**；到 M3 时 `robot_base` 串口桥接、`robot_lidar` X2 驱动和 `robot_bringup` launch 已落地，其余节点在后续里程碑逐个加入。
+RK3566 侧的 ROS 2 Humble 工作空间，对应本项目的移动抓取机器人。M1 建立了**可编译的包骨架**；到 M5 时 `robot_base` 串口桥接、`robot_lidar` X2 驱动和 `robot_bringup` 的建图/板端/Nav2 launch 已落地，其余节点在后续里程碑逐个加入。
 
 ## 环境
 
@@ -38,12 +38,24 @@ source install/setup.bash
 
 构建产物 `build/`、`install/`、`log/` 已在仓库根目录 `.gitignore` 中忽略，不入库。
 
+## 导航（M5）
+
+按 M4 的分工，Nav2 跑在 PC：板端 `board.launch.py` 只发 `/odom`、`/scan`、TF，PC 端启动 `navigation.launch.py`（AMCL + NavFn + DWB + 恢复行为）。AMCL 默认按建图起点 `(0,0,0)` 初始化；换了起点先用 RViz 的 **2D Pose Estimate** 覆盖。导航前先使能底盘：
+
+```bash
+ros2 launch robot_bringup navigation.launch.py
+ros2 service call /set_enable std_srvs/srv/SetBool "{data: true}"
+python3 tools/bench/nav_goal.py --enable --goal 1.5 -0.5 0
+```
+
+离线验证（不接硬件）：`tools/bench/nav_smoke.sh`。参数与验收细节见 [`robot_bringup/README.md`](src/robot_bringup/README.md) 和 [M5 测试报告](../docs/nodes/m5/test-report.md)。
+
 ## 包职责
 
 | 包 | 职责 | 关键接口 |
 | --- | --- | --- |
 | `robot_interfaces` | 所有自定义消息、服务、动作 | `RobotStatus`、`SystemEvent`、`ClearFault`、`GetVersion`、`Grasp` |
-| `robot_bringup` | 启动编排、参数、地图、URDF | launch 文件 |
+| `robot_bringup` | 启动编排、参数、地图、URDF；建图 / 板端 / Nav2 | launch 文件、`NavigateToPose`（Nav2） |
 | `robot_base` | ROS 2 话题 ↔ 串口帧，唯一的底盘硬件边界 | `/cmd_vel`、`/odom`、`/robot_status`、`/system_event` |
 | `robot_lidar` | YDLIDAR X2 串口驱动，输出扫描与点云 | `/scan`、`/lidar/points` |
 | `robot_raw_bridge` | 测试用：主机原始字节 → `/scan`、`/odom` | `/lidar/raw`、`/stm32/raw` |

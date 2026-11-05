@@ -56,7 +56,7 @@ mobile_manipulator_ws/src/
 
 | 话题 | 类型 | 频率 | QoS |
 | --- | --- | --- | --- |
-| `/cmd_vel` | `geometry_msgs/Twist` | 50 Hz | RELIABLE |
+| `/cmd_vel` | `geometry_msgs/Twist` | 20 Hz（Nav2 velocity_smoother；base_bridge 内部 50 Hz 帧） | RELIABLE |
 | `/odom` | `nav_msgs/Odometry` | 50 Hz | RELIABLE |
 | `/scan` | `sensor_msgs/LaserScan` | 约 6 Hz（X2；设计值 10 Hz） | BEST_EFFORT |
 | `/lidar/points` | `sensor_msgs/PointCloud2` | 随雷达（X2 约 6 Hz） | BEST_EFFORT |
