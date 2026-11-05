@@ -118,7 +118,7 @@ mobile_manipulator_ws/src/
 | `app_state.c` | 主状态机（INIT / IDLE / MANUAL / AUTO / ESTOP / FAULT） |
 | `app_fault.c` | 故障仲裁与降级策略 |
 | `app_report.c` | 上报节奏（ODOM / WHEEL_SPEED / ARM / STATUS / HEARTBEAT） |
-| `app_battery.c` | 电池电压读取与低压判定 |
+| `app_battery.c` | 电池采样、5 点中值滤波与低压去抖判定 |
 | `app_robot_config.h` | 全部需要实测/标定的数字 |
 
 **约定**：`protocol`、`app_state`、`app_fault` 不允许 `#include "stm32f1xx_hal.h"` 或 `FreeRTOS.h`。这条约束保证了它们能在 PC 上编译和测试。

@@ -348,7 +348,7 @@ impl_bsp_motor → bsp_motor_dual_pwm → platform_pwm_set_duty
 |  |  | `app_state` | 主状态机 | 不做 I/O |
 |  |  | `app_fault` | 故障仲裁与降级策略 | 不做 I/O |
 |  |  | `app_report` | 上报节奏 | 只决定何时发 |
-|  |  | `app_battery` | 电池采样与低压判定 | 只读 ADC |
+|  |  | `app_battery` | 电池采样、中值滤波与低压去抖 | 只读 ADC；连续 5 次滤波低压才置位 |
 | 服务 | `02_Service` | `service_chassis` | 麦轮逆解、四轮 PID、里程计、超时、急停锁存 | 不读时钟，时间由调用方注入 |
 |  |  | `service_arm` | 六关节限位、使能、目标保持 | 不实现总线协议 |
 |  |  | `service_proto` | 帧解析、命令分发、ACK、SEQ 去重、上报组帧 | 唯一 UART 发送者 |
