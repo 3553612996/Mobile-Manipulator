@@ -31,6 +31,7 @@ tests/
 | [`unit/app/test_app_params.c`](unit/app/test_app_params.c) | L1 | `01_APP/app_robot/app_params` | 存储子系统 | 底盘增益/几何/比例/限速写入桩 |
 | [`unit/app/test_app_motion_test.c`](unit/app/test_app_motion_test.c) | L1 | `01_APP/app_robot/app_motion_test` | M3 | 底盘使能/速度/里程计桩 |
 | [`unit/app/test_app_storage.c`](unit/app/test_app_storage.c) | L1 | `01_APP/app_robot/app_storage` | 存储子系统 | 内存队列、存储服务/协议桩 |
+| [`unit/app/test_app_battery.c`](unit/app/test_app_battery.c) | L1 | `01_APP/app_robot/app_battery` | M3 收尾 | ADC 读取桩 |
 
 上位机的编解码测试在 [`tools/host_gui/test_protocol.py`](../tools/host_gui/test_protocol.py)，与被测代码同目录（依赖 `host_gui.protocol` 的 import 关系），不复制到 `tests/`。
 
@@ -42,7 +43,15 @@ L3 台架测试不在 `tests/`：它需要在真机上跑，工具是 [`tools/be
 
 ## 运行
 
-每份测试的开头注释里都有完整的 `gcc` 命令（包含全部 `-I` 和源文件），复制即可。汇总：
+每份测试的开头注释里都有完整的 `gcc` 命令（包含全部 `-I` 和源文件），复制即可。一次跑全部：
+
+```bash
+python scripts/run_unit_tests.py
+```
+
+脚本直接从文件头注释里取命令，不维护第二份编译参数；CI 用的也是这一条。
+
+汇总：
 
 | 测试 | 产物 |
 | --- | --- |
@@ -59,6 +68,7 @@ L3 台架测试不在 `tests/`：它需要在真机上跑，工具是 [`tools/be
 | `test_app_params.c` | `build/test_app_params` |
 | `test_app_motion_test.c` | `build/test_app_motion_test` |
 | `test_app_storage.c` | `build/test_app_storage` |
+| `test_app_battery.c` | `build/test_app_battery` |
 | `host_gui/test_protocol.py` | `python tools/host_gui/test_protocol.py` |
 
 **通过标准**：进程退出码 0。测试用 `CHECK()` 宏累计失败数，有任何一项 FAIL 都会返回非 0，CI 与手工执行都以退出码为准。
