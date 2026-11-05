@@ -78,5 +78,8 @@ Thumbs.db
 # ===== 厂商参考代码：只做移植依据，不入库 =====
 firmware/商家源代码/
 
+# ===== 本机调试环境：Windows 串口桥，依赖本机 ROS 2/COM 口，不入库 =====
+tools/ros2_bridge/
+
 # ===== 其他 =====
 ARCHITECTURE copy.md
