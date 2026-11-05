@@ -1,5 +1,7 @@
 # Mobile-Manipulator
 
+[![CI](https://github.com/3553612996/Mobile-Manipulator/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/3553612996/Mobile-Manipulator/actions/workflows/ci.yml)
+
 六轴移动抓取机器人 | RK3566 (ROS2) + STM32 双控架构 | 激光 SLAM 建图导航 · YOLO+RKNN 端侧视觉 · 手眼标定抓取 · Vosk 离线语音
 
 > 当前版本：**v0.3.0（M3 底盘闭环）** —— 四轮速度环、参数与标定固化、落地 1 m / 360° 里程计初步。
@@ -73,6 +75,18 @@ source install/setup.bash
 ```
 
 ROS 2 侧已有 `robot_base` 串口桥接、`robot_lidar` X2 驱动和 `robot_bringup` launch，其余节点随 M4 之后的里程碑补充，详见 [mobile_manipulator_ws](mobile_manipulator_ws/README.md)。固件用 Keil MDK 打开 [app.uvprojx](firmware/app/MDK-ARM/app.uvprojx) 构建，目标 STM32F103RCT6。
+
+## 持续集成
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在推送到 `develop`、向 `develop`/`main` 提 PR 时跑三组检查：
+
+| 任务 | 内容 |
+| --- | --- |
+| L1 单元测试 | 14 个 host gcc 测试，`scripts/run_unit_tests.py` 直接从各测试文件头注释里取 `gcc` 命令，不再维护第二份编译参数 |
+| 上位机协议 | `tools/host_gui/test_protocol.py` 的 38 个协议向量 |
+| ROS 2 | `ros:humble` 容器里 `colcon build` + `colcon test`（`robot_base`、`robot_lidar` 的 gtest） |
+
+固件是 Keil ARMCC 工程，Linux runner 上跑不了；固件编译门禁仍在本地 `UV4.exe -b`，CI 只覆盖能脱离硬件的部分。
 
 ## 说明
 

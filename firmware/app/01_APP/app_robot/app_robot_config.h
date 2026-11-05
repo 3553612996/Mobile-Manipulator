@@ -153,6 +153,15 @@
 
 /* 7.4 V (2S) pack: warn at 3.4 V/cell, well above the 3.0 V/cell floor. */
 #define APP_BATTERY_LOW_MV              ((uint16_t)6800u)
+/*
+ * Motor inrush pulls the pack down for a few tens of milliseconds, so one
+ * conversion is not a battery state. Sample at 10 Hz, take the median of the
+ * last 5 samples, and require 5 consecutive filtered lows (~0.7 s of sustained
+ * sag) before raising the low-battery fault.
+ */
+#define APP_BATTERY_SAMPLE_PERIOD_MS    ((uint32_t)100u)
+#define APP_BATTERY_FILTER_WINDOW       ((uint8_t)5u)
+#define APP_BATTERY_LOW_COUNT           ((uint8_t)5u)
 
 /* ------------------------------- Key ------------------------------------ */
 
@@ -174,7 +183,7 @@
  * forward, long press latches the emergency stop). In test mode the long
  * press no longer e-stops; the protocol ESTOP and the power switch remain.
  */
-#define APP_MOTION_TEST_ENABLE          1
+#define APP_MOTION_TEST_ENABLE          0
 #define APP_MOTION_TEST_STRAIGHT_MM     ((int32_t)1000)
 #define APP_MOTION_TEST_STRAIGHT_MM_S   ((int16_t)150)
 #define APP_MOTION_TEST_SPIN_CDEG       ((int32_t)36000)
