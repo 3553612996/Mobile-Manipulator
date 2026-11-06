@@ -8,7 +8,7 @@
 | [M2](m2/) | [测试报告](m2/test-report.md)、[架构分层检查](m2/layering-audit.md) | ✅ 通过 |
 | [M3](m3/) | [测试报告](m3/test-report.md)、[架构分层检查](m3/layering-audit.md) | ✅ 通过（架空台架 + 落地里程计初步；落地复测清单见报告 6.2） |
 | [M4](m4/) | [板端部署与 PC 端建图](m4/board-deploy.md) | ✅ 建图与定位链路通过（PC 端；Nav2 属 M5） |
-| [M5](m5/) | [Nav2 导航测试报告](m5/test-report.md) | 🚧 离线闭环通过（仿真真值 7.3~9.2 cm）；实机 `0x0202` 已确认低电量并修复，实机精度待补 |
+| [M5](m5/) | [Nav2 导航测试报告](m5/test-report.md) | ✅ 固定点实机 3~8 cm（<10 cm）；动态障碍/恢复/长时待补 |
 
 ## 约定
 
