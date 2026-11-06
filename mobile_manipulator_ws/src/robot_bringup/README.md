@@ -12,7 +12,7 @@ robot_bringup/
 └── urdf/     机器人模型与 TF
 ```
 
-`urdf/` 与 `config/` 已开始填入，`maps/` 与 `launch/` 的其余条目随 M4～M5 加入。
+`urdf/`、`config/`、`maps/` 与 launch 已在 M4～M5 填入：建图、板端部署与 Nav2 导航均在本包编排。
 
 ## 坐标系与 TF 树
 
@@ -23,7 +23,7 @@ map ──(SLAM / AMCL)── odom ──(base_bridge)── base_link
                                               └── wheel_fl / wheel_fr / wheel_rl / wheel_rr
 ```
 
-竖直方向（离地高度）：底盘顶面 140 mm → 第二层板上表面 204 mm → 机械臂旋转轴 274 mm。三个臂节（`arm_link1~3`）等量完长度再挂到 `arm_base_link` 下面。
+竖直方向（离地高度）：底盘板面 50 mm → 第二层板上表面 102 mm → 机械臂旋转轴 167 mm；雷达扫描中心 92.4 mm。三个臂节（`arm_link1~3`）等量完长度再挂到 `arm_base_link` 下面。
 
 | 变换 | 发布者 | 来源 |
 | --- | --- | --- |
@@ -42,13 +42,13 @@ map ──(SLAM / AMCL)── odom ──(base_bridge)── base_link
 | 属性 | 当前值 | 状态 |
 | --- | --- | --- |
 | `base_length` / `base_width` | 0.245 / 0.195 | ✅ 已量（含轮外缘） |
-| `ground_clearance` | 0.040 | ✅ 底盘底面离地 |
+| `base_plate_top_z` | 0.050 | ✅ 2026-11-02：2 mm 板，板面离地 50 mm |
 | `wheelbase` / `wheel_separation` | 0.170 / 0.165 | ✅ 2026-11-02 实测；**轮距必须等于固件 `SET_PARAM 0x01`** |
-| `deck2_top_z` | 0.204 | ✅ 由"层间 64 mm"换算 |
-| `deck2_length` / `deck2_width` / `deck2_thickness` | 0.245 / 0.195 / 0.005 | ⬜ 沿用底盘尺寸，待实测 |
-| `arm_base_height` | 0.070 | ✅ 底座高出第二层板 70 mm |
-| `arm_base_x` / `arm_base_y` | 0.000 / 0.000 | ⬜ 待实测：底座在板上的位置 |
-| `laser_x` / `laser_y` / `laser_z` | 0.080 / 0.000 / 0.150 | ⬜ 待实测；扫描平面不能与任何一层板相交，支撑柱也会挡出窄盲区 |
+| `deck2_top_z` | 0.102 | ✅ 由层间 50 mm + 2 mm 板厚换算 |
+| `deck2_length` / `deck2_width` / `deck2_thickness` | 0.245 / 0.195 / 0.002 | 长宽沿用底盘尺寸（⬜ 待实测）；板厚 ✅ |
+| `arm_base_height` | 0.065 | ✅ 底座高出第二层板 65 mm |
+| `arm_base_x` / `arm_base_y` | 0.0575 / 0.000 | ✅ 旋转底座中心距车头 65 mm 换算 |
+| `laser_x` / `laser_y` / `laser_z` | 0.0625 / 0.000 / 0.0924 | ✅ 2026-11-02 实测；扫描平面不能与任何一层板相交 |
 
 偏航角只写在 `config/lidar.yaml` 的 `angle_offset_deg`，URDF 的 `laser_yaw` 保持 0；两处都设会重复旋转。
 
@@ -63,7 +63,7 @@ map ──(SLAM / AMCL)── odom ──(base_bridge)── base_link
 | `launch/board.launch.py` | RK3566 板端：底盘 + 雷达 + TF，不建图 | M4 |
 | `launch/remote_mapping.launch.py` | PC 端：接收板卡 `/scan`/`/odom` + TF，跑 SLAM | M4 |
 | `launch/slam.launch.py` | 激光建图与定位（后续拆分/定位模式） | M4 |
-| `launch/nav2.launch.py` | Nav2 导航 | M5 |
+| `launch/navigation.launch.py` | PC 端 Nav2：AMCL + NavFn + DWB + 恢复行为 + RViz | M5 |
 | `launch/vision.launch.py` | 相机与视觉推理 | M7 |
 | `launch/task.launch.py` | 任务状态机 | M8 |
 | `launch/robot.launch.py` | 整机启动编排 | M8 |
@@ -97,6 +97,54 @@ ros2 run nav2_map_server map_saver_cli -f maps/room1
 这一版**不接 IMU/EKF**，`odom→base_link` 只由 `base_bridge` 发布。以后加 EKF 时，把 `base.yaml` 的 `publish_tf` 设为 `false`，由 EKF 接替。参数在 `config/slam_toolbox.yaml`，RViz 布局在 `config/mapping.rviz`。
 
 > 底盘和雷达如果都是 CH340，VID/PID 相同，`/dev/ttyUSB*` 可能互换；用 `config/udev/` 按物理口/序列号固定，或每次启动确认端口。
+
+## Nav2 导航（M5）
+
+运行位置：**PC**。板端 `board.launch.py` 只发 `/odom`、`/scan` 和 TF；PC 端不要重复启动 `robot_state_publisher` / `base_bridge` / `x2_lidar`，否则 TF 会出现两个发布者。
+
+```bash
+# 板端
+ros2 launch robot_bringup board.launch.py
+
+# PC 端（默认 maps/room2.yaml）
+ros2 launch robot_bringup navigation.launch.py
+# 换地图 / 不开 RViz / 使用组合容器
+ros2 launch robot_bringup navigation.launch.py \
+    map:=$PWD/mobile_manipulator_ws/src/robot_bringup/maps/room1.yaml rviz:=false
+ros2 launch robot_bringup navigation.launch.py use_composition:=True
+
+# 使能底盘（必须；IDLE 下 base_bridge 把 /cmd_vel 换成零速）
+ros2 service call /set_enable std_srvs/srv/SetBool "{data: true}"
+
+# 发目标（也可以用 RViz 的 Nav2 Goal）
+python3 tools/bench/nav_goal.py --enable --goal 1.5 -0.5 0
+```
+
+启动后：
+
+- `map_server` 加载地图，AMCL 发布 `map → odom`。AMCL 默认按建图起点 `(0, 0, 0)` 自动初始化；如果这次开机位置不在建图起点，用 RViz 的 **2D Pose Estimate** 或 `nav_goal.py --initial-pose X Y YAW` 覆盖。
+- 没给初始位姿时 AMCL 不发布 `map → odom`，全局代价地图会卡在等 TF，Nav2 生命周期无法完成激活，RViz 里就点不了目标点。排查：`ros2 lifecycle get /bt_navigator`，应为 `active`。
+- `NavigateToPose` 由 `bt_navigator` 提供；控制器输出经 `velocity_smoother` 变成 `/cmd_vel`，交给板端 `base_bridge`。
+- 参数在 `config/nav2_params.yaml`：0.25 m/s、1.0 rad/s、差速模型、足迹 0.27 × 0.22 m、位置容差 0.05 m。
+
+```text
+/scan + /odom + TF ──► AMCL / costmaps ──► NavFn ──► DWB
+                                              └──/cmd_vel_nav──► velocity_smoother ──/cmd_vel──► base_bridge
+```
+
+**离线验证**（不接硬件）：
+
+```bash
+tools/bench/nav_smoke.sh
+```
+
+`nav_sim.py` 按地图射线生成 `/scan`、用 `/cmd_vel` 积分 `/odom`，完整跑 AMCL + Nav2 + `NavigateToPose`。结果与实机验收清单见 [M5 测试报告](../../../docs/nodes/m5/test-report.md)。
+
+注意：
+
+- 导航前必须 `/set_enable true`；`IDLE` 下底座不动，但 AMCL 仍能定位。
+- `/scan` 是 `BEST_EFFORT`；用 RViz 或 Best Effort 订阅才能看到。
+- 2+8G 板卡不跑 Nav2；等 4+32G 版本再考虑迁移。
 
 ## 主机原始数据建图（当前 PC 测试）
 
