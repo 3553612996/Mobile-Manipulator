@@ -111,6 +111,7 @@ python3 tools/bench/nav_goal.py --goal 1.5 -0.5 0
 | 运行约 10 s 后 `smoother_server IS DOWN`，整套节点被 lifecycle manager 关闭 | VM 负载高，默认 4 s bond 心跳超时误判 | 尝试 YAML 设 `bond_timeout: 10`，但 Humble 的 `nav2_bringup` 不给 lifecycle_manager 传 params_file，实测仍是 4 s；后续用 `use_composition:=True` 或降低负载规避 |
 | `nav_goal.py` 一直报 `no /amcl_pose yet` | `/amcl_pose` 是 `RELIABLE + TRANSIENT_LOCAL`，工具用 `VOLATILE` 订阅，错过锁存消息 | 订阅 QoS 改为 `TRANSIENT_LOCAL` |
 | AMCL 在稀疏地图上滞后约 12 cm | `sigma_hit=0.2` 对 0.05 m 栅格过宽，10 cm 才更新一次 | `sigma_hit=0.10`，5 cm / 0.05 rad 更新，120 束 |
+| 实机设目标后约 50 s 停车，`0x0202` | 电池电量低，STM32 欠压/上报中断；换 USB 线后仍复现 | 充电后复测不再出现，问题关闭；`0x0401` 低压 WARN 同源 |
 
 ## 7. 未覆盖与实机验收
 
@@ -124,16 +125,18 @@ python3 tools/bench/nav_goal.py --goal 1.5 -0.5 0
 - PC ↔ RK3566 的 DDS 网络延迟与丢包；
 - 30 min 以上连续运行、内存与 CPU 占用。
 
-### 7.1 实机尝试（2026-11-05）
+### 7.1 实机问题：低电量导致 0x0202（已修复）
 
-在板端 `board.launch.py` + PC `navigation.launch.py` 能正常激活、`/odom` 与 `/scan` 有数据的前提下，设置目标后约 50 s 出现 `0x0202 通信超时`，底盘进入 ESTOP。板端记录：
+2026-11-05 实机尝试：在板端 `board.launch.py` + PC `navigation.launch.py` 能正常激活、`/odom` 与 `/scan` 有数据的前提下，设置目标后约 50 s 出现 `0x0202 通信超时`，底盘进入 ESTOP。板端记录：
 
 - `serial link lost (533~2532 ms since last frame)`，随后 `no frames from MCU`；
 - 22:04:40 内核记录 `usb 3-1: USB disconnect`，约 1 s 后重枚举；
 - 更换 STM32 的 USB 线后物理掉线消失，但运动时 MCU 上报仍会停 0.5~2.5 s，`0x0202` 复现；
 - 电池约 7.0~7.2 V，期间也出现过 `0x0401` 低压 WARN。
 
-结论：导航栈已经输出到 `/cmd_vel`，实机停车由串口/MCU 上报中断触发，不是 Nav2 或膨胀层。待充电、检查 STM32 供电与 UART 线材后复测；这次尝试**不算** M5 实机验收通过。
+2026-11-06 确认根因：**电池电量低**。低电压下 STM32 欠压/复位，上报流中断 0.5~2.5 s，MCU 锁存 `0x0202`；同一原因触发 `0x0401` 低压 WARN。更换 USB 线后仍复现，说明线材不是这次 `0x0202` 的根因（换线解决的是 22:04 的物理掉线）。
+
+充电后复测：`0x0202` 与 MCU 上报中断不再出现，问题关闭。导航栈本身正常，故障期间也已输出到 `/cmd_vel`，不是 Nav2 或膨胀层。本次尝试不作为 M5 到达精度验收数据，实机精度仍按下面的步骤补测。
 
 实机验收建议：
 
@@ -145,4 +148,4 @@ python3 tools/bench/nav_goal.py --goal 1.5 -0.5 0
 
 ## 8. 结论
 
-**M5 离线闭环通过**：launch、AMCL、代价地图、NavFn、DWB、恢复行为与 `NavigateToPose` 在 `room2` 上完整跑通；三次最终配置运行的真值误差 7.3~9.2 cm，处于指标边缘，其中一次航向超出 0.15 rad 约 2.3°。**没有成功的实机导航数据，M5 不标记为完成**；实机尝试中的 `0x0202` 见第 7.1 节，待充电与线材处理后按第 7 节复测。
+**M5 离线闭环通过**：launch、AMCL、代价地图、NavFn、DWB、恢复行为与 `NavigateToPose` 在 `room2` 上完整跑通；三次最终配置运行的真值误差 7.3~9.2 cm，处于指标边缘，其中一次航向超出 0.15 rad 约 2.3°。实机 `0x0202` 已确认由低电量导致，充电后复测关闭（第 7.1 节）；**M5 的实机到达精度数据仍待按第 7 节补测，因此不标记为完成**。
